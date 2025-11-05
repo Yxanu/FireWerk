@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  firewerk:
+    build: .
+    environment:
+      - FIRELFY_URL=${FIRELFY_URL}
+      - PROMPT_FILE=${PROMPT_FILE}
+      - OUTPUT_DIR=${OUTPUT_DIR}
+      - HEADLESS=${HEADLESS}
+      - SLOW_MO_MS=${SLOW_MO_MS}
+      - VARIANTS_PER_PROMPT=${VARIANTS_PER_PROMPT}
+      - BASE_DELAY_MS=${BASE_DELAY_MS}
+      - JITTER_MS=${JITTER_MS}
+      - TIMEOUT_MS=${TIMEOUT_MS}
+      - POST_CLICK_WAIT_MS=${POST_CLICK_WAIT_MS}
+      - COOKIES_PATH=${COOKIES_PATH}
+    volumes:
+      - ./:/app
