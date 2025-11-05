@@ -30,7 +30,7 @@ In Coolify UI:
 	4.	Build Pack: Dockerfile
 	5.	Base Directory: /
 	6.	Name: firewerk
-	7.	Exposed Port: leave empty (no HTTP interface)
+	7.	Exposed Port: 3000 (placeholder - FireWerk doesn't expose HTTP, but Coolify requires a port)
 
 ⸻
 

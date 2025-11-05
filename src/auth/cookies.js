@@ -17,16 +17,25 @@ export async function applyCookies(page, cookies) {
   if (!cookies || !cookies.length) return;
   const client = await page.target().createCDPSession();
   await client.send('Network.enable');
+  let successCount = 0;
   for (const c of cookies) {
-    await client.send('Network.setCookie', {
-      name: c.name,
-      value: c.value,
-      domain: c.domain?.replace(/^\./, '') || 'adobe.com',
-      path: c.path || '/',
-      secure: Boolean(c.secure),
-      httpOnly: Boolean(c.httpOnly),
-      sameSite: (c.sameSite || 'None'),
-      expires: c.expires && Number.isFinite(c.expires) ? c.expires : undefined
-    }).catch(() => {});
+    try {
+      // Chrome DevTools Protocol expects domain without leading dot
+      const domain = c.domain?.replace(/^\./, '') || 'adobe.com';
+      await client.send('Network.setCookie', {
+        name: c.name,
+        value: c.value,
+        domain: domain,
+        path: c.path || '/',
+        secure: Boolean(c.secure),
+        httpOnly: Boolean(c.httpOnly),
+        sameSite: (c.sameSite || 'None'),
+        expires: c.expires && Number.isFinite(c.expires) ? c.expires : undefined
+      });
+      successCount++;
+    } catch (e) {
+      // Silently skip invalid cookies
+    }
   }
+  info(`Successfully set ${successCount} of ${cookies.length} cookies`);
 }

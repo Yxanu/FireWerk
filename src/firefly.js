@@ -22,17 +22,26 @@ export async function generateImages(prompts) {
   const page = await browser.newPage();
 
   // Auth via cookies
-  const cookiesPath = process.env.COOKIES_PATH;
-  const cookies = cookiesPath ? await loadCookiesFromFile(cookiesPath) : null;
-  if (cookies) {
+  const cookiesPath = process.env.COOKIES_PATH || './data/cookies.adobe.json';
+  const cookies = await loadCookiesFromFile(cookiesPath);
+  const hasCookies = cookies && cookies.length > 0;
+  
+  if (hasCookies) {
     await page.goto('https://adobe.com', { waitUntil: 'domcontentloaded' });
     await applyCookies(page, cookies);
+    info(`Applied ${cookies.length} cookies for authentication`);
+    // Give cookies time to be processed
+    await delay(1000);
+  } else {
+    warn('No cookies applied. Login manually in the visible browser if HEADLESS=false.');
   }
 
-  await page.goto(process.env.FIRELFY_URL, { waitUntil: 'networkidle2' });
+  const fireflyUrl = process.env.FIRELFY_URL || 'https://firefly.adobe.com/generate/images';
+  info(`Navigating to ${fireflyUrl}...`);
+  await page.goto(fireflyUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
-  if (!cookies) {
-    warn('No cookies applied. Login manually in the visible browser if HEADLESS=false.');
+  if (!hasCookies) {
+    warn('Waiting 15 seconds for manual login...');
     await delay(15000);
   }
 
@@ -72,7 +81,19 @@ export async function generateImages(prompts) {
     const id = item.prompt_id || item.id || `item_${Math.random().toString(36).slice(2,8)}`;
     info(`🪄 Prompt: ${id}`);
 
-    await page.waitForSelector(SEL.promptTextarea, { timeout: timeoutMs });
+    // Wait for page to be ready and check if we're logged in
+    try {
+      await page.waitForSelector(SEL.promptTextarea, { timeout: timeoutMs });
+    } catch (e) {
+      error(`Failed to find prompt textarea. Page may not be loaded or authentication may have failed.`);
+      error(`Current URL: ${page.url()}`);
+      // Try to take a screenshot for debugging
+      try {
+        await page.screenshot({ path: './output/debug-page.png', fullPage: true });
+        info('Debug screenshot saved to ./output/debug-page.png');
+      } catch {}
+      throw new Error(`Cannot find prompt textarea. Check authentication and page load. Original error: ${e.message}`);
+    }
     await page.evaluate((text, sel) => {
       const el = document.querySelector(sel);
       if (el) {
