@@ -45,7 +45,16 @@ export async function generateImages(prompts) {
 
   info(`Navigating to ${fireflyUrl}...`);
   await page.goto(fireflyUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
+  
+  // Wait for page to be fully interactive (React SPA needs time to render)
+  info('Waiting for page to fully load...');
+  await delay(3000);
+  
+  // Check if we're on a login page or if there are errors
+  const pageTitle = await page.title();
+  const pageUrl = page.url();
+  info(`Page loaded: ${pageTitle} at ${pageUrl}`);
+  
   if (!hasCookies) {
     warn('Waiting 15 seconds for manual login...');
     await delay(15000);
@@ -88,8 +97,41 @@ export async function generateImages(prompts) {
     info(`🪄 Prompt: ${id}`);
 
     // Wait for page to be ready and check if we're logged in
+    let workingSelector = SEL.promptTextarea;
     try {
-      await page.waitForSelector(SEL.promptTextarea, { timeout: timeoutMs });
+      // Try multiple selector strategies
+      const selectors = [
+        SEL.promptTextarea,
+        'textarea[placeholder*="prompt"]',
+        'textarea[aria-label*="prompt"]',
+        '[data-testid*="prompt"] textarea',
+        '[role="textbox"]',
+      ];
+      
+      for (const selector of selectors) {
+        try {
+          await page.waitForSelector(selector, { timeout: 10000, visible: true });
+          info(`Found textarea using selector: ${selector}`);
+          workingSelector = selector;
+          break;
+        } catch {}
+      }
+      
+      if (workingSelector === SEL.promptTextarea && !await page.$(SEL.promptTextarea)) {
+        // Last resort: check what's actually on the page
+        const pageContent = await page.evaluate(() => {
+          const textareas = Array.from(document.querySelectorAll('textarea'));
+          const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+          return {
+            textareas: textareas.length,
+            inputs: inputs.length,
+            bodyText: document.body.innerText.substring(0, 200),
+          };
+        });
+        warn(`Page diagnostics: ${pageContent.textareas} textareas, ${pageContent.inputs} text inputs found`);
+        warn(`Page content preview: ${pageContent.bodyText}...`);
+        throw new Error('No textarea found with any selector');
+      }
     } catch (e) {
       error(`Failed to find prompt textarea. Page may not be loaded or authentication may have failed.`);
       error(`Current URL: ${page.url()}`);
@@ -100,13 +142,15 @@ export async function generateImages(prompts) {
       } catch {}
       throw new Error(`Cannot find prompt textarea. Check authentication and page load. Original error: ${e.message}`);
     }
+    
+    // Use the selector that actually worked
     await page.evaluate((text, sel) => {
       const el = document.querySelector(sel);
       if (el) {
         el.value = text;
         el.dispatchEvent(new Event('input', { bubbles: true }));
       }
-    }, item.prompt_text, SEL.promptTextarea);
+    }, item.prompt_text, workingSelector);
 
     if (item.aspect_ratio) await setIfPresent(SEL.ratioDropdown, item.aspect_ratio);
     if (item.style)        await setIfPresent(SEL.styleDropdown, item.style);
