@@ -48,7 +48,13 @@ POST_CLICK_WAIT_MS=9000
 BASE_DELAY_MS=1500
 JITTER_MS=800
 
-📁 Mount your prompts and cookies folder into the container’s /app/data if you want to update them without rebuilding.
+📁 Mount your prompts and cookies folder into the container's /app/data if you want to update them without rebuilding.
+
+⚠️ **Important**: After deploying, you need to add your cookies file to the volume:
+1. Go to the "Files" or "Directories" tab in Coolify
+2. Navigate to `/app/data/`
+3. Upload `cookies.adobe.json` to the volume
+4. Or use the Terminal to copy the file: `cp /path/to/cookies.adobe.json /app/data/`
 
 ⸻
 
@@ -60,6 +66,8 @@ Under Storage Volumes, add:
 /app/data    →  firewerk_data
 
 This keeps your generated images and prompt files between deployments.
+
+**Initial Setup**: After first deployment, upload your `cookies.adobe.json` and `prompts.csv` files to the `/app/data` volume using Coolify's file manager or terminal.
 
 ⸻
 
