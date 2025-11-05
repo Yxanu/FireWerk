@@ -26,17 +26,23 @@ export async function generateImages(prompts) {
   const cookies = await loadCookiesFromFile(cookiesPath);
   const hasCookies = cookies && cookies.length > 0;
   
+  const fireflyUrl = process.env.FIRELFY_URL || 'https://firefly.adobe.com/generate/images';
+  
   if (hasCookies) {
-    await page.goto('https://adobe.com', { waitUntil: 'domcontentloaded' });
-    await applyCookies(page, cookies);
-    info(`Applied ${cookies.length} cookies for authentication`);
-    // Give cookies time to be processed
-    await delay(1000);
+    // Apply cookies before navigating - they'll work on any Adobe domain
+    info(`Applying ${cookies.length} cookies for authentication...`);
+    // Navigate to a simple page first to establish context, or apply directly
+    try {
+      await page.goto('about:blank');
+      await applyCookies(page, cookies);
+      info(`Successfully applied cookies`);
+    } catch (e) {
+      warn(`Error applying cookies: ${e.message}. Continuing anyway...`);
+    }
   } else {
     warn('No cookies applied. Login manually in the visible browser if HEADLESS=false.');
   }
 
-  const fireflyUrl = process.env.FIRELFY_URL || 'https://firefly.adobe.com/generate/images';
   info(`Navigating to ${fireflyUrl}...`);
   await page.goto(fireflyUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
