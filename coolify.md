@@ -50,11 +50,29 @@ JITTER_MS=800
 
 📁 Mount your prompts and cookies folder into the container's /app/data if you want to update them without rebuilding.
 
-⚠️ **Important**: After deploying, you need to add your cookies file to the volume:
-1. Go to the "Files" or "Directories" tab in Coolify
-2. Navigate to `/app/data/`
-3. Upload `cookies.adobe.json` to the volume
-4. Or use the Terminal to copy the file: `cp /path/to/cookies.adobe.json /app/data/`
+⚠️ **Important**: After deploying, you need to add your cookies file to the volume (it's excluded from git for security):
+
+**Option 1: Using Coolify File Manager**
+1. Go to your FireWerk deployment in Coolify
+2. Click the "Files" or "Directories" tab
+3. Navigate to `/app/data/`
+4. Click "Upload" and select your `cookies.adobe.json` file
+
+**Option 2: Using Terminal**
+1. Go to the "Terminal" tab in Coolify
+2. Upload your `cookies.adobe.json` file using the file upload feature
+3. Or if you have SSH access to the server:
+   ```bash
+   # Copy from your local machine to the server, then:
+   docker cp cookies.adobe.json <container-name>:/app/data/cookies.adobe.json
+   ```
+
+**Verify the file is there:**
+After uploading, check the logs on next run - you should see:
+```
+[LOG] Files in /app/data: prompts.csv, cookies.adobe.json
+[LOG] Loaded 28 cookies from /app/data/cookies.adobe.json
+```
 
 ⸻
 
@@ -67,7 +85,9 @@ Under Storage Volumes, add:
 
 This keeps your generated images and prompt files between deployments.
 
-**Initial Setup**: After first deployment, upload your `cookies.adobe.json` and `prompts.csv` files to the `/app/data` volume using Coolify's file manager or terminal.
+**Initial Setup**: 
+- `prompts.csv` is included in the git repo and will be automatically available in the container
+- `cookies.adobe.json` is excluded from git (for security) and must be manually uploaded to the `/app/data` volume after deployment
 
 ⸻
 
