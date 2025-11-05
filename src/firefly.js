@@ -48,14 +48,31 @@ export async function generateImages(prompts) {
   
   // Wait for page to be fully interactive (React SPA needs time to render)
   info('Waiting for page to fully load...');
-  await delay(3000);
+  await delay(5000); // Increased wait time for React SPA
   
   // Check if we're on a login page or if there are errors
   const pageTitle = await page.title();
   const pageUrl = page.url();
   info(`Page loaded: ${pageTitle} at ${pageUrl}`);
   
-  if (!hasCookies) {
+  // Check if we're seeing a sign-in page
+  const isSignInPage = await page.evaluate(() => {
+    const bodyText = document.body.innerText.toLowerCase();
+    return bodyText.includes('sign in') || bodyText.includes('sign in to') || bodyText.includes('log in');
+  });
+  
+  if (isSignInPage) {
+    if (hasCookies) {
+      error('Cookies were applied but page shows sign-in. Cookies may be expired or invalid.');
+      error('Please refresh your cookies file with a new export from your browser.');
+    } else {
+      warn('Page shows sign-in prompt. No cookies were loaded.');
+    }
+    warn('Waiting 20 seconds in case manual login is needed...');
+    await delay(20000);
+  }
+  
+  if (!hasCookies && !isSignInPage) {
     warn('Waiting 15 seconds for manual login...');
     await delay(15000);
   }
@@ -122,14 +139,56 @@ export async function generateImages(prompts) {
         const pageContent = await page.evaluate(() => {
           const textareas = Array.from(document.querySelectorAll('textarea'));
           const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+          const allInputs = Array.from(document.querySelectorAll('input'));
+          const buttons = Array.from(document.querySelectorAll('button'));
+          const contentEditable = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+          
+          // Get detailed info about potential prompt fields
+          const potentialFields = [];
+          textareas.forEach((el, i) => {
+            potentialFields.push({
+              type: 'textarea',
+              index: i,
+              placeholder: el.placeholder || '',
+              ariaLabel: el.getAttribute('aria-label') || '',
+              id: el.id || '',
+              className: el.className || '',
+              visible: el.offsetParent !== null,
+            });
+          });
+          
+          contentEditable.forEach((el, i) => {
+            potentialFields.push({
+              type: 'contenteditable',
+              index: i,
+              placeholder: el.getAttribute('placeholder') || '',
+              ariaLabel: el.getAttribute('aria-label') || '',
+              id: el.id || '',
+              className: el.className || '',
+              visible: el.offsetParent !== null,
+            });
+          });
+          
           return {
             textareas: textareas.length,
             inputs: inputs.length,
-            bodyText: document.body.innerText.substring(0, 200),
+            allInputs: allInputs.length,
+            buttons: buttons.length,
+            contentEditable: contentEditable.length,
+            bodyText: document.body.innerText.substring(0, 500),
+            potentialFields: potentialFields,
           };
         });
-        warn(`Page diagnostics: ${pageContent.textareas} textareas, ${pageContent.inputs} text inputs found`);
+        warn(`Page diagnostics:`);
+        warn(`  - ${pageContent.textareas} textareas, ${pageContent.inputs} text inputs, ${pageContent.allInputs} total inputs`);
+        warn(`  - ${pageContent.buttons} buttons, ${pageContent.contentEditable} contentEditable elements`);
         warn(`Page content preview: ${pageContent.bodyText}...`);
+        if (pageContent.potentialFields.length > 0) {
+          info(`Potential prompt fields found:`);
+          pageContent.potentialFields.forEach(field => {
+            info(`  - ${field.type} (visible: ${field.visible}): id="${field.id}", placeholder="${field.placeholder}", aria-label="${field.ariaLabel}"`);
+          });
+        }
         throw new Error('No textarea found with any selector');
       }
     } catch (e) {
