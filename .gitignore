@@ -17,6 +17,7 @@ output/
 data/cookies.adobe.json
 data/cookies_auth.json
 data/cookies_firefly.json
+data/storageState.json
 data/*.adobe.json
 *.cookies.json
 
