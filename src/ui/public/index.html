@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FireWerk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-content">
+        <img src="firewerk-logo.png" alt="FireWerk" class="logo-image" />
+        <div class="header-text">
+          <h1>FireWerk</h1>
+          <p class="subtitle">Adobe Firefly Automation</p>
+        </div>
+        <button class="btn btn-outline" onclick="toggleShortcutsPanel()" aria-label="Show keyboard shortcuts" title="Keyboard shortcuts (Cmd+/)">⌨️</button>
+      </div>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="generate" onclick="switchTab('generate')">Generate</button>
+      <button class="tab" data-tab="outputs" onclick="switchTab('outputs')">Outputs</button>
+      <button class="tab" data-tab="history" onclick="switchTab('history')">History</button>
+    </div>
+
+    <div id="generate-tab" class="tab-content active">
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Type</label>
+          <select id="generation-type" aria-label="Generation type selector" onchange="updateFormFields()">
+            <option value="images">Images</option>
+            <option value="speech">Speech</option>
+          </select>
+        </div>
+
+        <div class="form-row full-width">
+          <label>Prompts</label>
+          <select id="prompt-file" aria-label="Prompt file selector" onchange="loadPromptPreview()">
+            <option value="">Select prompts...</option>
+          </select>
+        </div>
+
+        <div class="form-row" id="model-row">
+          <label>Model</label>
+          <div class="tooltip-wrapper">
+            <select id="model" aria-label="Model selector" aria-describedby="model-tooltip">
+              <option value="">Default</option>
+            <optgroup label="Adobe Models">
+              <option value="Firefly Image 5 (Vorschau)">Firefly Image 5 (Preview)</option>
+              <option value="Firefly Image 4 Ultra">Firefly Image 4 Ultra</option>
+              <option value="Firefly Image 4">Firefly Image 4</option>
+              <option value="Firefly Image 3">Firefly Image 3</option>
+            </optgroup>
+            <optgroup label="Partner Models">
+              <option value="Flux Kontext Max">Flux Kontext Max</option>
+              <option value="Flux Kontext Pro">Flux Kontext Pro</option>
+              <option value="Flux 1.1 Pro">Flux 1.1 Pro</option>
+              <option value="Flux 1.1 Ultra">Flux 1.1 Ultra</option>
+              <option value="Flux 1.1 Ultra (Raw)">Flux 1.1 Ultra (Raw)</option>
+              <option value="Gemini 2.5 (Nano Banana)">Gemini 2.5 (Nano Banana)</option>
+              <option value="Imagen 4">Imagen 4</option>
+              <option value="Imagen 3">Imagen 3</option>
+              <option value="GPT Image">GPT Image</option>
+              <option value="Runway Gen-4 Image">Runway Gen-4 Image</option>
+            </optgroup>
+          </select>
+          <div class="tooltip" id="model-tooltip" role="tooltip">Choose the AI model for image generation. Firefly models are Adobe's native models, while Partner models include Flux, Gemini, Imagen, and others.</div>
+          </div>
+        </div>
+
+        <div class="form-row" id="aspect-row">
+          <label>Aspect Ratio</label>
+          <div class="segmented-group" role="group" aria-label="Select aspect ratio">
+            <button type="button" class="segmented-button" data-value="" onclick="setAspectRatio(this)">Default</button>
+            <button type="button" class="segmented-button" data-value="1:1" onclick="setAspectRatio(this)">1:1</button>
+            <button type="button" class="segmented-button" data-value="4:5" onclick="setAspectRatio(this)">4:5</button>
+            <button type="button" class="segmented-button" data-value="16:9" onclick="setAspectRatio(this)">16:9</button>
+          </div>
+          <input type="hidden" id="aspect-ratio" value="">
+        </div>
+
+        <div class="form-row" id="style-row">
+          <label>Style</label>
+          <div class="segmented-group" role="group" aria-label="Select style">
+            <button type="button" class="segmented-button active" data-value="" onclick="setStyle(this)">Default</button>
+            <button type="button" class="segmented-button" data-value="photographic" onclick="setStyle(this)">Photographic</button>
+            <button type="button" class="segmented-button" data-value="art" onclick="setStyle(this)">Art</button>
+            <button type="button" class="segmented-button" data-value="graphic" onclick="setStyle(this)">Graphic</button>
+          </div>
+          <input type="hidden" id="style" value="">
+        </div>
+
+        <div class="form-row" id="variants-row">
+          <label>Variants</label>
+          <div class="segmented-group" role="group" aria-label="Select number of variants">
+            <button type="button" class="segmented-button active" data-value="1" onclick="setVariants(this)">1</button>
+            <button type="button" class="segmented-button" data-value="2" onclick="setVariants(this)">2</button>
+            <button type="button" class="segmented-button" data-value="4" onclick="setVariants(this)">4</button>
+            <button type="button" class="segmented-button" data-value="8" onclick="setVariants(this)">8</button>
+          </div>
+          <input type="hidden" id="variants" value="1">
+        </div>
+
+        <div class="form-row" id="capture-mode-row">
+          <label>Capture Mode</label>
+          <div class="tooltip-wrapper">
+            <select id="capture-mode" aria-label="Capture mode selector" aria-describedby="capture-mode-tooltip">
+              <option value="download">Download (Full Resolution)</option>
+              <option value="screenshot">Screenshot (Fast, Smaller)</option>
+            </select>
+            <div class="tooltip" id="capture-mode-tooltip" role="tooltip">Download captures full resolution images (slower), Screenshot captures visible viewport (faster, smaller file size).</div>
+          </div>
+        </div>
+
+        <div class="form-row full-width" id="global-style-row">
+          <label>Global Style</label>
+          <input type="text" id="global-style" aria-label="Global style input" placeholder="photorealistic, 8k, highly detailed">
+        </div>
+
+        <div class="form-row full-width">
+          <label>Output Dir</label>
+          <div class="input-with-icon">
+            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <input type="text" id="output-dir" aria-label="Output directory path" placeholder="./output" value="./output">
+          </div>
+        </div>
+      </div>
+
+      <div id="prompt-preview" class="preview"></div>
+
+      <div class="actions">
+        <button class="btn" onclick="startGeneration()" id="generate-btn">
+          <span>Start Generation</span>
+        </button>
+        <button class="btn btn-outline" onclick="loadPromptFiles()">
+          <span>Refresh</span>
+        </button>
+        <button class="btn btn-outline" onclick="stopGeneration()" id="stop-btn" style="display: none;">
+          <span>Stop Generation</span>
+        </button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </div>
+
+    <div id="outputs-tab" class="tab-content">
+      <div class="actions sticky-actions">
+        <div class="outputs-controls-left">
+          <button class="btn btn-outline" onclick="loadOutputs()">Refresh Outputs</button>
+          <div class="control-group">
+            <label for="sort-outputs" class="control-label">Sort:</label>
+            <select id="sort-outputs" class="control-select" onchange="sortOutputs()">
+              <option value="name-asc">Name A-Z</option>
+              <option value="name-desc">Name Z-A</option>
+              <option value="date-newest" selected>Newest First</option>
+              <option value="date-oldest">Oldest First</option>
+            </select>
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" id="view-toggle" onchange="toggleView()">
+            <span>List View</span>
+          </label>
+        </div>
+        <div class="outputs-controls-right">
+          <div class="control-group">
+            <label for="bg-threshold" class="control-label">Aggressiveness:</label>
+            <div class="slider-group">
+              <input type="range" id="bg-threshold" min="5" max="30" value="10" step="1">
+              <span id="bg-threshold-value" class="slider-value">10%</span>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="remove-bg-batch-btn" onclick="removeBackgroundBatch()" disabled>
+            <span>Remove Background</span>
+          </button>
+        </div>
+      </div>
+      <div id="outputs-grid" class="outputs-grid" role="region" aria-label="Generation outputs" aria-busy="false"></div>
+    </div>
+
+    <div id="history-tab" class="tab-content">
+      <div class="actions">
+        <button class="btn btn-outline" onclick="loadHistory()">Refresh History</button>
+      </div>
+      <div id="history-grid" class="history-grid" role="region" aria-label="Generation history"></div>
+    </div>
+  </div>
+
+  <div class="shortcuts-overlay" id="shortcuts-overlay" onclick="toggleShortcutsPanel()" style="display: none;"></div>
+  <div class="shortcuts-panel" id="shortcuts-panel" role="dialog" aria-labelledby="shortcuts-title" aria-modal="true" style="display: none;">
+    <div class="shortcuts-header">
+      <h2 id="shortcuts-title">Keyboard Shortcuts</h2>
+      <button onclick="toggleShortcutsPanel()" aria-label="Close shortcuts panel">×</button>
+    </div>
+    <div class="shortcuts-list">
+      <div class="shortcut-item">
+        <span class="shortcut-description">Start generation</span>
+        <span class="shortcut-key"><kbd>Cmd</kbd> / <kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
+      </div>
+      <div class="shortcut-item">
+        <span class="shortcut-description">Focus prompt selector</span>
+        <span class="shortcut-key"><kbd>Cmd</kbd> / <kbd>Ctrl</kbd> + <kbd>K</kbd></span>
+      </div>
+      <div class="shortcut-item">
+        <span class="shortcut-description">Show keyboard shortcuts</span>
+        <span class="shortcut-key"><kbd>Cmd</kbd> / <kbd>Ctrl</kbd> + <kbd>/</kbd></span>
+      </div>
+      <div class="shortcut-item">
+        <span class="shortcut-description">Close panels/dialogs</span>
+        <span class="shortcut-key"><kbd>Esc</kbd></span>
+      </div>
+      <div class="shortcut-item">
+        <span class="shortcut-description">Navigate between tabs</span>
+        <span class="shortcut-key"><kbd>Tab</kbd></span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
