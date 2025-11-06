@@ -111,10 +111,46 @@ async function main() {
   });
   
   if (isSignInPage) {
-    console.warn('[WARN] Page shows sign-in prompt. Authentication may have failed.');
-    console.warn('[WARN] Re-run "npm run capture:auth" to refresh your authentication state.');
-    console.warn('[WARN] Waiting 20 seconds in case manual login is needed...');
-    await page.waitForTimeout(20000);
+    console.log('[INFO] Sign-in page detected. Attempting automatic login...');
+    const loginEmail = process.env.ADOBE_LOGIN_EMAIL || 'web@adam-medien.de';
+    
+    try {
+      // Find and fill email input
+      const emailInput = page.locator('input[type="email"], input[name="email"], input[id*="email"], input[placeholder*="email" i]').first();
+      await emailInput.waitFor({ timeout: 10000, state: 'visible' });
+      await emailInput.fill(loginEmail);
+      console.log(`[INFO] Filled email: ${loginEmail}`);
+      await page.waitForTimeout(1000);
+      
+      // Click continue/submit button
+      const continueBtn = page.getByRole('button', { name: /continue|sign in|next|submit/i }).first();
+      await continueBtn.click({ timeout: 5000 });
+      console.log('[INFO] Clicked continue button');
+      await page.waitForTimeout(2000);
+      
+      // Wait for 2FA prompt or success
+      console.log('[INFO] Waiting for 2FA approval in Adobe access app...');
+      console.log('[INFO] Please approve the login request in your Adobe access app.');
+      
+      // Wait for navigation away from login page or for generate button to appear
+      try {
+        await page.waitForFunction(
+          () => {
+            const bodyText = document.body.innerText.toLowerCase();
+            return !bodyText.includes('sign in') && !bodyText.includes('sign in to');
+          },
+          { timeout: 60000 }
+        );
+        console.log('[INFO] Login successful!');
+      } catch {
+        console.log('[INFO] Still waiting for 2FA approval...');
+        await page.waitForTimeout(30000); // Give more time for 2FA
+      }
+    } catch (e) {
+      console.warn(`[WARN] Automatic login failed: ${e.message}`);
+      console.warn('[WARN] Please login manually in the browser window...');
+      await page.waitForTimeout(30000); // Give time for manual login
+    }
   }
 
   for (const item of prompts) {
