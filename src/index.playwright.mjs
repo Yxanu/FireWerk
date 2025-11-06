@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { chromium } from 'playwright';
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 
@@ -27,7 +28,7 @@ function safeName(v) {
 }
 
 function loadPromptsSync(filePath) {
-  const raw = fs.readFileSync(filePath, 'utf8');
+  const raw = fsSync.readFileSync(filePath, 'utf8');
   if (filePath.endsWith('.json')) return JSON.parse(raw);
   return parse(raw, { columns: true, skip_empty_lines: true });
 }
@@ -86,6 +87,18 @@ async function main() {
   // Wait a bit for React SPA to fully render
   await page.waitForTimeout(3000);
   
+  // Dismiss cookie consent banner if present
+  try {
+    const consentButton = page.locator('#onetrust-accept-btn-handler, button:has-text("Accept"), button:has-text("Enable all")');
+    if (await consentButton.isVisible({ timeout: 3000 })) {
+      await consentButton.click();
+      console.log('[INFO] Dismissed cookie consent banner');
+      await page.waitForTimeout(1000);
+    }
+  } catch {
+    // No consent banner, continue
+  }
+  
   // Check if we're on a sign-in page
   const isSignInPage = await page.evaluate(() => {
     const bodyText = document.body.innerText.toLowerCase();
@@ -135,8 +148,9 @@ async function main() {
     for (let v = 1; v <= VARIANTS; v++) {
       captured.length = 0;
 
-      const genBtn = page.getByRole('button', { name: /generate/i });
-      await genBtn.first().click();
+      // Use the actual generate button (not the tab button)
+      const genBtn = page.getByTestId('generate-button');
+      await genBtn.click();
 
       await page.waitForTimeout(WAIT_AFTER_CLICK);
 
