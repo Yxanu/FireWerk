@@ -131,19 +131,52 @@ async function main() {
       throw new Error(`Cannot find prompt textarea. Check authentication and page load. Original error: ${e.message}`);
     }
     
-    await promptBox.fill(item.prompt_text);
-
-    // Optional: set ratio/style if your UI exposes them
+    // Set aspect ratio BEFORE filling prompt (as per Geckio guide)
     if (item.aspect_ratio) {
       try {
-        await page.getByLabel(/aspect|ratio/i).first().selectOption(item.aspect_ratio);
+        // Try multiple strategies for aspect ratio
+        const ratioSelectors = [
+          page.getByLabel(/aspect|ratio/i),
+          page.locator('[aria-label*="Aspect"]'),
+          page.locator('[data-testid*="aspect"]'),
+          page.locator('button:has-text("Aspect")'),
+        ];
+        for (const selector of ratioSelectors) {
+          try {
+            await selector.first().click({ timeout: 2000 });
+            await page.getByText(item.aspect_ratio, { exact: false }).first().click({ timeout: 2000 });
+            console.log(`[INFO] Set aspect ratio to ${item.aspect_ratio}`);
+            await page.waitForTimeout(500);
+            break;
+          } catch {}
+        }
       } catch {}
     }
+    
+    // Set content type/style if specified
     if (item.style) {
       try {
-        await page.getByLabel(/style/i).first().selectOption(item.style);
+        const styleSelectors = [
+          page.getByLabel(/content type|style/i),
+          page.locator('[aria-label*="Content Type"]'),
+          page.locator('[data-testid*="content"]'),
+          page.locator('button:has-text("Content")'),
+        ];
+        for (const selector of styleSelectors) {
+          try {
+            await selector.first().click({ timeout: 2000 });
+            await page.getByText(item.style, { exact: false }).first().click({ timeout: 2000 });
+            console.log(`[INFO] Set content type to ${item.style}`);
+            await page.waitForTimeout(500);
+            break;
+          } catch {}
+        }
       } catch {}
     }
+    
+    // Now fill the prompt
+    await promptBox.fill(item.prompt_text);
+    await page.waitForTimeout(500); // Let the prompt settle
 
     for (let v = 1; v <= VARIANTS; v++) {
       captured.length = 0;
