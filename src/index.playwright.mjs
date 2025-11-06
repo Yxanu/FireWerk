@@ -176,14 +176,30 @@ async function main() {
     
     // Now fill the prompt
     await promptBox.fill(item.prompt_text);
-    await page.waitForTimeout(500); // Let the prompt settle
+    await page.waitForTimeout(1000); // Let the prompt settle and trigger validation
+    
+    // Wait for generate button to be enabled (it's disabled until prompt is valid)
+    const genBtn = page.getByTestId('generate-button');
+    try {
+      await genBtn.waitFor({ state: 'visible', timeout: 5000 });
+      // Wait for button to be enabled (not disabled)
+      await page.waitForFunction(
+        () => {
+          const btn = document.querySelector('[data-testid="generate-button"]');
+          return btn && !btn.hasAttribute('aria-disabled') && btn.getAttribute('aria-disabled') !== 'true';
+        },
+        { timeout: 10000 }
+      );
+      console.log('[INFO] Generate button is enabled');
+    } catch (e) {
+      console.warn('[WARN] Generate button may still be disabled, attempting click anyway...');
+    }
 
     for (let v = 1; v <= VARIANTS; v++) {
       captured.length = 0;
 
       // Use the actual generate button (not the tab button)
-      const genBtn = page.getByTestId('generate-button');
-      await genBtn.click();
+      await genBtn.click({ timeout: 30000 });
 
       await page.waitForTimeout(WAIT_AFTER_CLICK);
 
@@ -225,8 +241,10 @@ async function main() {
     await page.waitForTimeout(jitter(BASE_DELAY_MS * 2, JITTER_MS * 2));
   }
 
-  await browser.close();
   console.log('✅ All prompts processed');
+  console.log('[INFO] Keeping browser open for 5 seconds to verify results...');
+  await page.waitForTimeout(5000);
+  await browser.close();
 }
 
 main().catch((e) => {
