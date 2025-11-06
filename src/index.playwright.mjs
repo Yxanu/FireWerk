@@ -30,7 +30,12 @@ function safeName(v) {
 function loadPromptsSync(filePath) {
   const raw = fsSync.readFileSync(filePath, 'utf8');
   if (filePath.endsWith('.json')) return JSON.parse(raw);
-  return parse(raw, { columns: true, skip_empty_lines: true });
+  return parse(raw, { 
+    columns: true, 
+    skip_empty_lines: true,
+    relax_quotes: true,
+    escape: '"'
+  });
 }
 
 async function ensureDir(p) {
