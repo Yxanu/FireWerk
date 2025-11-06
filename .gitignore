@@ -3,6 +3,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
 
 # Environment variables
 .env
@@ -20,6 +21,10 @@ data/cookies_firefly.json
 data/storageState.json
 data/*.adobe.json
 *.cookies.json
+
+# Debug screenshots
+data/debug-*.png
+data/*.png
 
 # OS files
 .DS_Store
@@ -40,6 +45,7 @@ Desktop.ini
 .project
 .classpath
 .settings/
+.claude/
 
 # Docker
 .dockerignore
@@ -48,4 +54,8 @@ Desktop.ini
 *.tmp
 *.temp
 .cache/
+/tmp/
+
+# Test outputs
+test-output/
 

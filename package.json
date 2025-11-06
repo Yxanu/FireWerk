@@ -1,20 +1,22 @@
 {
   "name": "firewerk",
-  "version": "1.0.0",
-  "description": "FireWerk — Automated Firefly image generation via Playwright",
+  "version": "2.0.0",
+  "description": "FireWerk — Automated Adobe Firefly generation for images and speech via Playwright",
   "type": "module",
   "scripts": {
-    "start": "node src/index.playwright.mjs",
-    "dev": "HEADLESS=false node src/index.playwright.mjs",
-    "start:puppeteer": "node src/index.js",
-    "dev:puppeteer": "HEADLESS=false node src/index.js",
-    "capture:auth": "node tools/capture-auth.playwright.mjs",
-    "trace:open": "npx playwright show-trace trace.zip"
+    "ui": "node src/ui/server.mjs",
+    "generate:images": "node src/cli.mjs images",
+    "generate:speech": "node src/cli.mjs speech",
+    "legacy:start": "node src/index.playwright.mjs",
+    "legacy:dev": "HEADLESS=false node src/index.playwright.mjs",
+    "legacy:generate": "HEADLESS=false node tools/generate-with-auth.mjs",
+    "legacy:capture:auth": "node tools/capture-auth.playwright.mjs"
   },
   "dependencies": {
     "@playwright/test": "^1.48.0",
     "csv-parse": "^5.5.6",
     "dotenv": "^16.4.5",
+    "express": "^4.21.2",
     "playwright": "^1.48.0",
     "puppeteer": "^23.7.0"
   }

@@ -1,0 +1,4 @@
+prompt_id,text,voice,language
+greeting_001,"Hello and welcome to our service. We're glad to have you here.",Natural,English (US)
+announcement_001,"Important update: Our system will undergo maintenance tonight from 10 PM to midnight.",Professional,English (US)
+tutorial_001,"Let's get started with the basics. First, you'll need to create an account.",Friendly,English (US)

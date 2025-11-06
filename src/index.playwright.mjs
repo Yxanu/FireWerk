@@ -63,16 +63,25 @@ async function main() {
   const contextOptions = {
     viewport: { width: VIEWPORT_W, height: VIEWPORT_H }
   };
-  
+
   // Load storage state if it exists
   try {
     contextOptions.storageState = STORAGE_STATE;
   } catch {
     // Storage state doesn't exist, continue without it
   }
-  
+
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
+
+  // Move window off-screen if not headless
+  if (!HEADLESS) {
+    try {
+      await page.evaluate(() => {
+        window.moveTo(2000, 0); // Move window to the right
+      });
+    } catch {}
+  }
 
   // Network capture for generated images
   const captured = [];
@@ -92,60 +101,65 @@ async function main() {
   // Wait a bit for React SPA to fully render
   await page.waitForTimeout(3000);
   
-  // Dismiss cookie consent banner if present
-  try {
-    const consentButton = page.locator('#onetrust-accept-btn-handler, button:has-text("Accept"), button:has-text("Enable all")');
-    if (await consentButton.isVisible({ timeout: 3000 })) {
-      await consentButton.click();
-      console.log('[INFO] Dismissed cookie consent banner');
-      await page.waitForTimeout(1000);
-    }
-  } catch {
-    // No consent banner, continue
-  }
-  
-  // Check if we're on a sign-in page
-  const isSignInPage = await page.evaluate(() => {
-    const bodyText = document.body.innerText.toLowerCase();
-    return bodyText.includes('sign in') || bodyText.includes('sign in to') || bodyText.includes('log in');
-  });
-  
-  if (isSignInPage) {
-    console.log('[INFO] Sign-in page detected. Attempting automatic login...');
-    const loginEmail = process.env.ADOBE_LOGIN_EMAIL || 'web@adam-medien.de';
-    
+  // Function to dismiss cookie consent banner
+  async function dismissCookieBanner() {
     try {
-      // Find and fill email input
-      const emailInput = page.locator('input[type="email"], input[name="email"], input[id*="email"], input[placeholder*="email" i]').first();
-      await emailInput.waitFor({ timeout: 10000, state: 'visible' });
+      const consentButton = page.locator('#onetrust-accept-btn-handler, button:has-text("Accept"), button:has-text("Enable all")').first();
+      if (await consentButton.isVisible({ timeout: 2000 })) {
+        await consentButton.click({ force: true });
+        console.log('[INFO] Dismissed cookie consent banner');
+        await page.waitForTimeout(1000);
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  await dismissCookieBanner();
+
+  // Check if we're already logged in by looking for the generate button
+  const hasGenerateButton = await page.getByTestId('generate-button').isVisible({ timeout: 3000 }).catch(() => false);
+
+  if (!hasGenerateButton) {
+    console.log('[INFO] Not logged in. Attempting automatic login...');
+    const loginEmail = process.env.ADOBE_LOGIN_EMAIL || 'web@adam-medien.de';
+
+    // Look for and click "Sign in" button to navigate to login page
+    try {
+      const signInBtn = page.getByRole('button', { name: /sign in/i }).or(page.getByRole('link', { name: /sign in/i })).first();
+      if (await signInBtn.isVisible({ timeout: 3000 })) {
+        console.log('[INFO] Clicking "Sign in" button...');
+        await signInBtn.click();
+        await page.waitForTimeout(3000); // Wait for login page to load
+      }
+    } catch {
+      console.log('[INFO] No sign in button found, may already be on login page');
+    }
+
+    try {
+      console.log(`[INFO] Attempting automatic login with ${loginEmail}...`);
+
+      // Find and fill email input with multiple strategies
+      const emailInput = page.locator('input[type="email"], input[name="email"], input[name="username"], input[id*="email"], input[id*="username"], input[placeholder*="email" i], input[placeholder*="address" i]').first();
+      await emailInput.waitFor({ timeout: 15000, state: 'visible' });
       await emailInput.fill(loginEmail);
       console.log(`[INFO] Filled email: ${loginEmail}`);
       await page.waitForTimeout(1000);
-      
+
       // Click continue/submit button
       const continueBtn = page.getByRole('button', { name: /continue|sign in|next|submit/i }).first();
       await continueBtn.click({ timeout: 5000 });
       console.log('[INFO] Clicked continue button');
       await page.waitForTimeout(2000);
-      
+
       // Wait for 2FA prompt or success
       console.log('[INFO] Waiting for 2FA approval in Adobe access app...');
       console.log('[INFO] Please approve the login request in your Adobe access app.');
-      
-      // Wait for navigation away from login page or for generate button to appear
-      try {
-        await page.waitForFunction(
-          () => {
-            const bodyText = document.body.innerText.toLowerCase();
-            return !bodyText.includes('sign in') && !bodyText.includes('sign in to');
-          },
-          { timeout: 60000 }
-        );
-        console.log('[INFO] Login successful!');
-      } catch {
-        console.log('[INFO] Still waiting for 2FA approval...');
-        await page.waitForTimeout(30000); // Give more time for 2FA
-      }
+
+      // Wait for login to complete by checking for generate button
+      await page.getByTestId('generate-button').waitFor({ timeout: 90000, state: 'visible' });
+      console.log('[INFO] Login successful!');
+      await page.waitForTimeout(2000);
     } catch (e) {
       console.warn(`[WARN] Automatic login failed: ${e.message}`);
       console.warn('[WARN] Please login manually in the browser window...');
@@ -238,6 +252,9 @@ async function main() {
 
     for (let v = 1; v <= VARIANTS; v++) {
       captured.length = 0;
+
+      // Dismiss cookie banner before clicking generate (in case it reappears)
+      await dismissCookieBanner();
 
       // Use the actual generate button (not the tab button)
       await genBtn.click({ timeout: 30000 });
