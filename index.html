@@ -3,9 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FireWerk - Batch Your Imagination</title>
-  <meta name="description" content="Automated Adobe Firefly generation for images and speech via Playwright automation. Batch creative workflows with ease.">
+  <title>FireWerk - Adobe Firefly Bulk Image Generation Tool</title>
+  <meta name="description" content="Automate Adobe Firefly image generation at scale. Batch process hundreds of prompts with support for all Firefly models, partner AI models, and advanced features.">
   <link rel="icon" href="src/ui/public/firewerk-logo.png" type="image/png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --fw-color-bg: #0E0C0D;
@@ -25,15 +29,11 @@
     }
 
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
       background: radial-gradient(circle at top left, #1C1A1B, #0E0C0D 80%);
       color: var(--fw-color-text);
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 2rem;
+      padding: 0;
       position: relative;
       overflow-x: hidden;
     }
@@ -66,10 +66,17 @@
     }
 
     .container {
-      max-width: 900px;
-      text-align: center;
+      max-width: 1200px;
+      margin: 0 auto;
       position: relative;
       z-index: 1;
+      padding: 2rem;
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      padding: 4rem 2rem;
     }
 
     .logo {
@@ -81,75 +88,55 @@
     }
 
     @keyframes float {
-      0%, 100% {
-        transform: translateY(0px);
-      }
-      50% {
-        transform: translateY(-20px);
-      }
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-20px); }
     }
 
     h1 {
+      font-family: 'Space Grotesk', sans-serif;
       font-size: 4rem;
       font-weight: 700;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.02em;
       background: linear-gradient(90deg, var(--fw-color-accent), var(--fw-color-accent-alt));
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
       margin-bottom: 1rem;
-      text-shadow: 0 0 40px rgba(255, 107, 62, 0.3);
     }
 
     .tagline {
-      font-size: 1.5rem;
-      color: var(--fw-color-text-secondary);
-      margin-bottom: 3rem;
-      letter-spacing: 0.02em;
+      font-size: 1.75rem;
+      color: var(--fw-color-text);
+      margin-bottom: 1rem;
+      font-weight: 500;
     }
 
-    .description {
+    .subtitle {
       font-size: 1.125rem;
-      color: var(--fw-color-text);
-      line-height: 1.6;
+      color: var(--fw-color-text-secondary);
       margin-bottom: 3rem;
-      max-width: 700px;
+      max-width: 800px;
       margin-left: auto;
       margin-right: auto;
+      line-height: 1.6;
     }
 
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 1.5rem;
-      margin-bottom: 3rem;
+    .badges {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
     }
 
-    .feature {
+    .badge {
       background: var(--fw-color-glass);
       backdrop-filter: blur(var(--fw-blur));
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: var(--fw-radius);
-      padding: 2rem;
-      transition: all 0.3s ease;
-    }
-
-    .feature:hover {
-      transform: translateY(-8px);
-      box-shadow: 0 12px 40px rgba(255, 107, 62, 0.2);
-      border-color: rgba(255, 107, 62, 0.3);
-    }
-
-    .feature h3 {
-      font-size: 1.25rem;
-      margin-bottom: 0.75rem;
-      color: var(--fw-color-accent-alt);
-    }
-
-    .feature p {
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 0.5rem 1rem;
+      border-radius: 20px;
+      font-size: 0.875rem;
       color: var(--fw-color-text-secondary);
-      font-size: 0.9375rem;
-      line-height: 1.5;
     }
 
     .cta-buttons {
@@ -157,6 +144,7 @@
       gap: 1.5rem;
       justify-content: center;
       flex-wrap: wrap;
+      margin-bottom: 4rem;
     }
 
     .btn {
@@ -166,14 +154,15 @@
       font-weight: 600;
       text-decoration: none;
       transition: all 0.3s ease;
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
     }
 
     .btn-primary {
       background: linear-gradient(90deg, var(--fw-color-accent), var(--fw-color-accent-alt));
       color: white;
       box-shadow: 0 0 20px rgba(255, 60, 47, 0.4);
-      animation: ember-pulse 1.5s ease-in-out infinite;
     }
 
     .btn-primary:hover {
@@ -193,19 +182,207 @@
       border-color: rgba(255, 107, 62, 0.3);
     }
 
-    @keyframes ember-pulse {
-      0%, 100% {
-        box-shadow: 0 0 20px rgba(255, 60, 47, 0.4);
-      }
-      50% {
-        box-shadow: 0 0 30px rgba(255, 107, 62, 0.6);
-      }
+    /* Features Section */
+    .section {
+      padding: 4rem 2rem;
+      max-width: 1200px;
+      margin: 0 auto;
     }
 
-    .footer {
-      margin-top: 4rem;
+    .section-title {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 2.5rem;
+      text-align: center;
+      margin-bottom: 1rem;
+      color: var(--fw-color-text);
+    }
+
+    .section-subtitle {
+      text-align: center;
+      color: var(--fw-color-text-secondary);
+      margin-bottom: 3rem;
+      font-size: 1.125rem;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 4rem;
+    }
+
+    .feature-card {
+      background: var(--fw-color-glass);
+      backdrop-filter: blur(var(--fw-blur));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--fw-radius);
+      padding: 2rem;
+      transition: all 0.3s ease;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 12px 40px rgba(255, 107, 62, 0.2);
+      border-color: rgba(255, 107, 62, 0.3);
+    }
+
+    .feature-icon {
+      font-size: 2.5rem;
+      color: var(--fw-color-accent-alt);
+      margin-bottom: 1rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+      color: var(--fw-color-text);
+    }
+
+    .feature-card p {
+      color: var(--fw-color-text-secondary);
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    .feature-card ul {
+      list-style: none;
+      margin-top: 1rem;
+    }
+
+    .feature-card ul li {
       color: var(--fw-color-text-secondary);
       font-size: 0.9rem;
+      line-height: 1.8;
+      padding-left: 1.5rem;
+      position: relative;
+    }
+
+    .feature-card ul li::before {
+      content: "→";
+      position: absolute;
+      left: 0;
+      color: var(--fw-color-accent-alt);
+    }
+
+    /* Screenshot Section */
+    .screenshot-section {
+      margin: 4rem 0;
+    }
+
+    .screenshot-container {
+      background: var(--fw-color-glass);
+      backdrop-filter: blur(var(--fw-blur));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--fw-radius);
+      padding: 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .screenshot-container img {
+      width: 100%;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .screenshot-caption {
+      text-align: center;
+      color: var(--fw-color-text-secondary);
+      margin-top: 1rem;
+      font-size: 0.9375rem;
+    }
+
+    /* Quick Start Section */
+    .quick-start {
+      background: var(--fw-color-glass);
+      backdrop-filter: blur(var(--fw-blur));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: var(--fw-radius);
+      padding: 3rem;
+      margin: 4rem 0;
+    }
+
+    .quick-start h3 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.75rem;
+      margin-bottom: 2rem;
+      color: var(--fw-color-text);
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 2rem;
+    }
+
+    .step {
+      position: relative;
+    }
+
+    .step-number {
+      display: inline-block;
+      width: 40px;
+      height: 40px;
+      background: linear-gradient(90deg, var(--fw-color-accent), var(--fw-color-accent-alt));
+      border-radius: 50%;
+      text-align: center;
+      line-height: 40px;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .step h4 {
+      font-size: 1.125rem;
+      margin-bottom: 0.5rem;
+      color: var(--fw-color-text);
+    }
+
+    .step p {
+      color: var(--fw-color-text-secondary);
+      font-size: 0.9375rem;
+      line-height: 1.6;
+    }
+
+    .code-block {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 1.5rem 0;
+      overflow-x: auto;
+    }
+
+    .code-block code {
+      color: var(--fw-color-accent-alt);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+    }
+
+    /* Models Grid */
+    .models-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 2rem 0;
+    }
+
+    .model-tag {
+      background: rgba(255, 107, 62, 0.1);
+      border: 1px solid rgba(255, 107, 62, 0.3);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 0.875rem;
+      color: var(--fw-color-text);
+    }
+
+    /* Footer */
+    .footer {
+      text-align: center;
+      padding: 3rem 2rem;
+      color: var(--fw-color-text-secondary);
+      font-size: 0.9rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      margin-top: 4rem;
     }
 
     .footer a {
@@ -218,77 +395,270 @@
       color: var(--fw-color-accent);
     }
 
+    /* Responsive */
     @media (max-width: 768px) {
-      h1 {
-        font-size: 2.5rem;
-      }
-
-      .tagline {
-        font-size: 1.125rem;
-      }
-
-      .description {
-        font-size: 1rem;
-      }
-
-      .features {
-        grid-template-columns: 1fr;
-      }
-
-      .cta-buttons {
-        flex-direction: column;
-      }
-
-      .btn {
-        width: 100%;
-      }
+      h1 { font-size: 2.5rem; }
+      .tagline { font-size: 1.25rem; }
+      .subtitle { font-size: 1rem; }
+      .section-title { font-size: 2rem; }
+      .features-grid { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+      .models-grid { grid-template-columns: 1fr; }
+      .cta-buttons { flex-direction: column; }
+      .btn { width: 100%; justify-content: center; }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <img src="src/ui/public/firewerk-logo.png" alt="FireWerk Logo" class="logo">
-    
-    <h1>FireWerk</h1>
-    
-    <p class="tagline">Batch your imagination.</p>
-    
-    <p class="description">
-      Automated Adobe Firefly generation for images and speech via Playwright automation.
-      Feed CSV/JSON prompts and get high-quality outputs saved automatically with a beautiful
-      glassmorphism web UI or powerful CLI.
-    </p>
+    <!-- Hero Section -->
+    <div class="hero">
+      <img src="src/ui/public/firewerk-logo.png" alt="FireWerk Logo" class="logo">
+      <h1>FireWerk</h1>
+      <p class="tagline">Adobe Firefly Bulk Image Generation & Batch Processing Tool</p>
+      <p class="subtitle">
+        Automate Adobe Firefly image generation at scale. Batch process hundreds of prompts
+        with support for all Firefly models, partner AI models, and advanced features like
+        aspect ratio control, style presets, and background removal.
+      </p>
 
-    <div class="features">
-      <div class="feature">
-        <h3>🎨 Multi-Model Support</h3>
-        <p>Adobe Firefly models plus Flux, Imagen, Gemini, GPT Image, and Runway Gen-4</p>
+      <div class="badges">
+        <span class="badge"><i class="fas fa-code-branch"></i> MIT License</span>
+        <span class="badge"><i class="fab fa-node-js"></i> Node.js 18+</span>
+        <span class="badge"><i class="fas fa-robot"></i> 15+ AI Models</span>
+        <span class="badge"><i class="fas fa-layer-group"></i> Batch Processing</span>
       </div>
 
-      <div class="feature">
-        <h3>🖥️ Beautiful Web UI</h3>
-        <p>Glassmorphism interface with ember glow design, output gallery, and background removal</p>
-      </div>
-
-      <div class="feature">
-        <h3>⚡ Batch Processing</h3>
-        <p>Process hundreds of prompts from CSV/JSON files with aspect ratio and style control</p>
-      </div>
-
-      <div class="feature">
-        <h3>🔐 Auto Authentication</h3>
-        <p>Email prefill with 2FA approval, session persistence across runs</p>
+      <div class="cta-buttons">
+        <a href="https://github.com/Yxanu/FireWerk" class="btn btn-primary">
+          <i class="fab fa-github"></i> View on GitHub
+        </a>
+        <a href="https://github.com/Yxanu/FireWerk#quick-start" class="btn btn-secondary">
+          <i class="fas fa-rocket"></i> Get Started
+        </a>
       </div>
     </div>
 
-    <div class="cta-buttons">
-      <a href="https://github.com/yourusername/FireWerk" class="btn btn-primary">View on GitHub</a>
-      <a href="https://github.com/yourusername/FireWerk#quick-start" class="btn btn-secondary">Get Started</a>
+    <!-- Features Section -->
+    <div class="section">
+      <h2 class="section-title">Adobe Firefly Bulk Generation at Scale</h2>
+      <p class="section-subtitle">Process hundreds or thousands of prompts automatically</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-images"></i></div>
+          <h3>Bulk Image Generation</h3>
+          <p>Mass Adobe Firefly Image Generation - Process 100s or 1000s of prompts automatically</p>
+          <ul>
+            <li>All Adobe Firefly Models (3, 4, 4 Ultra, 5)</li>
+            <li>Partner AI Models (Flux, Gemini, Imagen, GPT)</li>
+            <li>Aspect Ratio Control (1:1, 4:5, 16:9)</li>
+            <li>Style Presets & Multi-Variant Generation</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-desktop"></i></div>
+          <h3>Professional Web Interface</h3>
+          <p>Modern Glassmorphism UI with ember glow design for managing bulk operations</p>
+          <ul>
+            <li>Drag-and-drop prompt management</li>
+            <li>Real-time batch generation monitoring</li>
+            <li>Output Gallery with thumbnails</li>
+            <li>Built-in Background Removal (rembg AI)</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-terminal"></i></div>
+          <h3>Command-Line Interface</h3>
+          <p>Scriptable Batch Processing for DevOps and CI/CD pipelines</p>
+          <ul>
+            <li>CSV/JSON Bulk Import</li>
+            <li>Environment Variables Config</li>
+            <li>Headless Mode for servers</li>
+            <li>Perfect for automation workflows</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-shield-alt"></i></div>
+          <h3>Smart Authentication</h3>
+          <p>One-Time Setup with persistent session management</p>
+          <ul>
+            <li>Login once, never again</li>
+            <li>2FA Support (Adobe Access app)</li>
+            <li>Automatic session renewal</li>
+            <li>No API Key Required</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-volume-up"></i></div>
+          <h3>Speech Generation</h3>
+          <p>Batch text-to-speech processing with Adobe Firefly</p>
+          <ul>
+            <li>Multiple voice options</li>
+            <li>Language selection</li>
+            <li>Automated audio download</li>
+            <li>Organized file management</li>
+          </ul>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-history"></i></div>
+          <h3>Generation History</h3>
+          <p>Track all bulk job runs and re-run previous generations</p>
+          <ul>
+            <li>Completion status tracking</li>
+            <li>Review generation parameters</li>
+            <li>Re-run previous jobs</li>
+            <li>Export generation logs</li>
+          </ul>
+        </div>
+      </div>
     </div>
 
+    <!-- Screenshots Section -->
+    <div class="section screenshot-section">
+      <h2 class="section-title">See FireWerk in Action</h2>
+      <p class="section-subtitle">Professional UI for managing bulk Adobe Firefly generations</p>
+
+      <div class="screenshot-container">
+        <img src="screenshots/ui-generate-tab.png" alt="FireWerk Generate Tab - Configure bulk image generation settings">
+        <p class="screenshot-caption"><i class="fas fa-magic"></i> Generate Tab - Configure models, aspect ratios, and styles for bulk processing</p>
+      </div>
+
+      <div class="screenshot-container">
+        <img src="screenshots/ui-outputs-tab.png" alt="FireWerk Outputs Tab - View and manage generated images">
+        <p class="screenshot-caption"><i class="fas fa-folder-open"></i> Outputs Tab - Browse generated images with background removal tools</p>
+      </div>
+
+      <div class="screenshot-container">
+        <img src="screenshots/ui-history-tab.png" alt="FireWerk History Tab - Track generation jobs">
+        <p class="screenshot-caption"><i class="fas fa-clock"></i> History Tab - Track all generation runs and re-run previous jobs</p>
+      </div>
+    </div>
+
+    <!-- Quick Start -->
+    <div class="section">
+      <div class="quick-start">
+        <h3><i class="fas fa-rocket"></i> Adobe Firefly Bulk Generation in 3 Steps</h3>
+
+        <div class="steps">
+          <div class="step">
+            <span class="step-number">1</span>
+            <h4>Install Dependencies</h4>
+            <p>Clone the repository and install Node.js packages</p>
+            <div class="code-block">
+              <code>git clone https://github.com/Yxanu/FireWerk.git<br>
+cd FireWerk<br>
+npm install</code>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-number">2</span>
+            <h4>Configure Settings</h4>
+            <p>Set up your Adobe Firefly email for automatic login</p>
+            <div class="code-block">
+              <code>cp .env.example .env<br>
+# Edit .env with your Adobe email</code>
+            </div>
+          </div>
+
+          <div class="step">
+            <span class="step-number">3</span>
+            <h4>Start Generating</h4>
+            <p>Launch the web UI or use CLI for batch processing</p>
+            <div class="code-block">
+              <code># Web UI<br>
+npm run ui<br><br>
+# CLI Batch Processing<br>
+npm run generate:images -- --prompts ./prompts.csv</code>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Supported Models -->
+    <div class="section">
+      <h2 class="section-title">15+ Supported AI Models</h2>
+      <p class="section-subtitle">All Adobe Firefly models plus partner AI integrations</p>
+
+      <div class="models-grid">
+        <div class="model-tag"><i class="fas fa-fire"></i> Firefly Image 5</div>
+        <div class="model-tag"><i class="fas fa-fire"></i> Firefly Image 4 Ultra</div>
+        <div class="model-tag"><i class="fas fa-fire"></i> Firefly Image 4</div>
+        <div class="model-tag"><i class="fas fa-fire"></i> Firefly Image 3</div>
+        <div class="model-tag"><i class="fas fa-bolt"></i> Flux Kontext Max</div>
+        <div class="model-tag"><i class="fas fa-bolt"></i> Flux 1.1 Ultra</div>
+        <div class="model-tag"><i class="fab fa-google"></i> Gemini 2.5</div>
+        <div class="model-tag"><i class="fab fa-google"></i> Imagen 4</div>
+        <div class="model-tag"><i class="fas fa-brain"></i> GPT Image</div>
+        <div class="model-tag"><i class="fas fa-video"></i> Runway Gen-4</div>
+      </div>
+    </div>
+
+    <!-- Use Cases -->
+    <div class="section">
+      <h2 class="section-title">Use Cases for Bulk Adobe Firefly Generation</h2>
+      <p class="section-subtitle">Perfect for teams and automated workflows</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-bullhorn"></i></div>
+          <h3>Marketing Teams</h3>
+          <p>Generate hundreds of social media images at once. Perfect for campaigns, A/B testing, and content calendars.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-shopping-cart"></i></div>
+          <h3>E-commerce</h3>
+          <p>Bulk create product photography variations with different styles, angles, and backgrounds.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-pencil-alt"></i></div>
+          <h3>Content Creators</h3>
+          <p>Mass produce blog post headers, thumbnails, and social media graphics for your content pipeline.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-briefcase"></i></div>
+          <h3>Agencies</h3>
+          <p>Automate client deliverables with batch processing. Generate hundreds of concept variations quickly.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-code"></i></div>
+          <h3>Developers</h3>
+          <p>Integrate Adobe Firefly into your automated workflows and CI/CD pipelines with CLI tools.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon"><i class="fas fa-palette"></i></div>
+          <h3>Designers</h3>
+          <p>Rapid ideation with bulk variant generation. Test multiple styles and compositions at scale.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
     <div class="footer">
-      <p>Made with 🔥 by the FireWerk team</p>
-      <p><a href="https://github.com/yourusername/FireWerk/blob/main/LICENSE">MIT License</a> • <a href="https://github.com/yourusername/FireWerk/blob/main/CONTRIBUTING.md">Contributing</a></p>
+      <p style="margin-bottom: 1rem;">
+        <strong>Adobe Firefly Bulk Generation Made Easy</strong> - Process hundreds of AI images automatically
+      </p>
+      <p>
+        <a href="https://github.com/Yxanu/FireWerk"><i class="fab fa-github"></i> GitHub</a> •
+        <a href="https://github.com/Yxanu/FireWerk/blob/main/LICENSE"><i class="fas fa-balance-scale"></i> MIT License</a> •
+        <a href="https://github.com/Yxanu/FireWerk#documentation"><i class="fas fa-book"></i> Documentation</a>
+      </p>
+      <p style="margin-top: 2rem; font-size: 0.8rem;">
+        Keywords: Adobe Firefly bulk generation, Adobe Firefly batch processing, automate Adobe Firefly,
+        bulk AI image generation, mass image generation Firefly, batch AI art creation
+      </p>
     </div>
   </div>
 </body>
