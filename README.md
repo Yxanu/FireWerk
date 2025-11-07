@@ -1,120 +1,141 @@
 <div align="center">
 
-<img src="src/ui/public/firewerk-logo.png" alt="FireWerk Logo" width="120" height="120" />
+<img src="src/ui/public/firewerk-logo.png" alt="FireWerk - Adobe Firefly Bulk Image Generation Tool" width="120" height="120" />
 
 # FireWerk 🔥
 
-**Batch your imagination.**
+**Adobe Firefly Bulk Image Generation & Batch Processing Tool**
 
-Automated Adobe Firefly generation for images and speech via Playwright automation.
+Automate Adobe Firefly image generation at scale. Batch process hundreds of prompts with support for all Firefly models, partner AI models, and advanced features like aspect ratio control, style presets, and background removal.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-[Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Web UI](#web-ui) • [CLI](#cli-usage) • [Contributing](#contributing)
+[Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Web UI](#web-ui) • [CLI](#cli-usage)
+
+**Keywords**: Adobe Firefly automation, bulk image generation, batch AI art, Firefly API alternative, automated creative workflow, mass image generation, AI batch processing
 
 </div>
 
 ---
 
-## ✨ Features
+## ✨ Features - Adobe Firefly Bulk Generation at Scale
 
-- **🎨 Image Generation** - Automated batch generation with support for multiple models:
-  - Adobe Firefly Image 3, 4, 4 Ultra, 5 (Preview)
-  - Partner models: Flux, Gemini, Imagen, GPT Image, Runway Gen-4
-  - Aspect ratio control (1:1, 4:5, 16:9, and more)
-  - Style presets (photographic, art, graphic)
-  - Multi-variant generation
-  - Download or screenshot capture modes
+### 🎨 Bulk Image Generation & Batch Processing
 
-- **🔊 Speech Generation** - Text-to-speech with customizable options:
-  - Multiple voice options
-  - Language selection
-  - Automated audio file download
+- **Mass Adobe Firefly Image Generation** - Process 100s or 1000s of prompts automatically
+  - **All Adobe Firefly Models**: Firefly Image 3, 4, 4 Ultra, 5 (Preview)
+  - **Partner AI Models**: Flux (Kontext Max/Pro, 1.1 Pro/Ultra), Google Gemini 2.5, Imagen 3/4, OpenAI GPT Image, Runway Gen-4
+  - **Aspect Ratio Control**: Square (1:1), Portrait (4:5), Landscape (16:9), and custom ratios
+  - **Style Presets**: Photographic, Art, Graphic, Editorial styles
+  - **Multi-Variant Generation**: Generate multiple variations per prompt
+  - **Two Capture Modes**: Full-resolution download or fast screenshot capture
+  - **CSV/JSON Import**: Bulk import prompts from spreadsheets or JSON files
 
-- **🖥️ Web UI** - Beautiful glassmorphism interface with ember glow design:
-  - Browser-based prompt management
-  - Real-time generation status
-  - Output gallery with thumbnails
-  - Background removal tool (via rembg)
-  - Generation history tracking
-  - Dark mode with orange/red accents
+### 🔊 Automated Speech Generation
 
-- **⚡ CLI** - Command-line interface for scripted workflows:
-  - Batch processing from CSV/JSON files
-  - Environment variable configuration
-  - Headless or visible browser modes
+- Batch text-to-speech processing with Adobe Firefly
+- Multiple voice options and language selection
+- Automated audio file download and organization
 
-- **🔐 Automated Login** - Seamless authentication:
-  - Email prefill with 2FA approval via Adobe Access app
-  - Session persistence (no repeated logins)
-  - Secure storage state management
+### 🖥️ Professional Web Interface
+
+- **Modern Glassmorphism UI** with ember glow design
+- **Drag-and-drop prompt management** for bulk operations
+- **Real-time batch generation monitoring** with progress tracking
+- **Output Gallery** with thumbnails and sorting options
+- **Built-in Background Removal** (powered by rembg AI)
+- **Generation History** for tracking bulk job runs
+- **Responsive Design** optimized for desktop workflows
+
+### ⚡ Command-Line Interface (CLI) for DevOps
+
+- **Scriptable Batch Processing** - Integrate with CI/CD pipelines
+- **CSV/JSON Bulk Import** - Process large prompt datasets
+- **Environment Variables** - Configure for different environments
+- **Headless Mode** - Run on servers without display
+- **Perfect for**: Marketing teams, content creators, ecommerce, social media automation
+
+### 🔐 Smart Authentication & Session Management
+
+- **One-Time Setup** - Login once, never again
+- **2FA Support** - Adobe Access app integration
+- **Persistent Sessions** - Automatic session renewal
+- **Secure Storage** - Local credential management
+- **No API Key Required** - Works with your existing Adobe account
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start - Adobe Firefly Bulk Generation in 3 Steps
 
 ### Prerequisites
 
-- Node.js 18+
-- npm or yarn
-- Adobe Firefly account
+- **Node.js 18+** (Download from [nodejs.org](https://nodejs.org/))
+- **Adobe Firefly Account** (Free tier works!)
+- **5 minutes** to get started with bulk image generation
 
 ### Installation
 
 ```bash
-# Clone the repository
+# 1. Clone the FireWerk bulk generation tool
 git clone https://github.com/yourusername/FireWerk.git
 cd FireWerk
 
-# Install dependencies
+# 2. Install dependencies
 npm install
 
-# Configure environment (optional)
+# 3. Configure your Adobe Firefly account (optional)
 cp .env.example .env
-# Edit .env with your Adobe email
+# Edit .env with your Adobe email for automatic login
 ```
 
-### Option 1: Web UI (Recommended)
+### Option 1: Web UI - Best for Bulk Image Management
 
-Start the web server and use the browser interface:
+Start the professional web interface for managing bulk Adobe Firefly generations:
 
 ```bash
 npm run ui
 ```
 
-Then open **http://localhost:3000** in your browser to:
-- ✅ Select prompt files from examples or upload your own
-- ✅ Configure generation options (model, aspect ratio, style)
-- ✅ Start image or speech generation with one click
-- ✅ View generated outputs in a beautiful gallery
-- ✅ Remove backgrounds from images
-- ✅ Track generation history
+Open **http://localhost:3000** to access the bulk generation dashboard:
 
-### Option 2: Command Line
+✅ **Import CSV/JSON** with hundreds of prompts
+✅ **Select Models** - Choose from 15+ AI models including all Firefly versions
+✅ **Configure Batch Settings** - Aspect ratios, styles, variants
+✅ **Monitor Progress** - Real-time status of bulk generation jobs
+✅ **Gallery View** - Browse and manage generated images
+✅ **Background Removal** - Batch remove backgrounds from generated images
+✅ **Export & Download** - Bulk download all generated assets
 
-Generate images directly from the terminal:
+### Option 2: CLI - Best for Automated Workflows
+
+Perfect for bulk processing in scripts, cron jobs, or CI/CD pipelines:
 
 ```bash
-# Basic image generation
-npm run generate:images -- --prompts ./examples/prompts/geckio.csv
+# Bulk generate images from CSV prompt file
+npm run generate:images -- --prompts ./examples/prompts/bulk-prompts.csv
 
-# With custom output directory
-npm run generate:images -- --prompts ./examples/prompts/geckio.csv --output ./my-output
+# Batch generate with specific model and output folder
+npm run generate:images -- --prompts ./prompts.csv --model "Firefly Image 4 Ultra" --output ./marketing-images
 
-# Generate speech
-npm run generate:speech -- --prompts ./examples/prompts/speech.csv
+# Mass generate with multiple variants per prompt
+npm run generate:images -- --prompts ./products.csv --variants 4 --output ./product-photos
+
+# Bulk speech generation
+npm run generate:speech -- --prompts ./audio-scripts.csv --output ./voiceovers
 ```
 
-### First Run - Authentication
+### First Run - One-Time Adobe Firefly Authentication
 
-On first run (or when storage state expires), the browser will open and:
+On first run, FireWerk will handle Adobe Firefly authentication automatically:
 
-1. Navigate to Adobe Firefly
-2. Fill in your email (from `FIREFLY_EMAIL` env var)
-3. Wait for you to approve login in your **Adobe Access app**
-4. Save the session for future runs (no repeated logins!)
+1. ✅ Browser opens to Adobe Firefly login page
+2. ✅ Your email is auto-filled (from .env file)
+3. ✅ Approve login in your **Adobe Access mobile app** (2FA)
+4. ✅ Session saved locally - **never login again!**
+5. ✅ Start batch generating images immediately
+
+**No API keys needed** - Works with your existing Adobe Firefly subscription!
 
 ---
 
@@ -394,41 +415,24 @@ FireWerk/
 
 ---
 
-## 🤝 Contributing
+## ⚠️ Important Notes for Bulk Adobe Firefly Generation
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+### Best Practices for Mass Image Generation
 
-### Development Setup
+- **Respect Adobe's Terms**: Use your own Adobe Firefly account for bulk generation
+- **Rate Limiting**: For very large batches (1000+ images), consider running overnight or in smaller batches
+- **Session Security**: Keep `storageState.json` secure (contains your Adobe session)
+- **Automated Processing**: FireWerk handles all UI interactions automatically
+- **Browser Automation**: Uses Playwright for reliable, unattended bulk generation
 
-```bash
-# Clone the repo
-git clone https://github.com/yourusername/FireWerk.git
-cd FireWerk
+### Use Cases for Bulk Adobe Firefly Generation
 
-# Install dependencies
-npm install
-
-# Run in development mode (visible browser)
-HEADLESS=false npm run generate:images -- --prompts ./examples/prompts/geckio.csv
-```
-
-### Reporting Issues
-
-Found a bug or have a feature request? Please open an issue on GitHub with:
-- Clear description of the problem or feature
-- Steps to reproduce (for bugs)
-- Expected vs actual behavior
-- Screenshots if applicable
-
----
-
-## ⚠️ Important Notes
-
-- **Respect Adobe's Terms**: Use your own account and moderate throughput
-- **Rate Limiting**: Keep generation rate moderate to respect Adobe's service
-- **Storage State**: Keep `storageState.json` secure (contains session data)
-- **Cookie Consent**: Automatically dismissed on Firefly pages
-- **Force Click**: Generate button is clicked with force to handle overlays
+✅ **Marketing Teams** - Generate hundreds of social media images at once
+✅ **E-commerce** - Bulk create product photography variations
+✅ **Content Creators** - Mass produce blog post headers and thumbnails
+✅ **Agencies** - Automate client deliverables with batch processing
+✅ **Developers** - Integrate Adobe Firefly into your automated workflows
+✅ **Designers** - Rapid ideation with bulk variant generation
 
 ---
 
@@ -436,14 +440,13 @@ Found a bug or have a feature request? Please open an issue on GitHub with:
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
+Free to use for commercial bulk Adobe Firefly image generation projects.
+
 ---
 
-## 🙏 Acknowledgments
+## 🔍 SEO Keywords
 
-- Built with [Playwright](https://playwright.dev/) for reliable browser automation
-- Styled with the Ember Glow design system (glassmorphism + orange/red accents)
-- Background removal powered by [rembg](https://github.com/danielgatis/rembg)
-- Inspired by the need for batch creative workflows
+Adobe Firefly bulk generation, Adobe Firefly batch processing, automate Adobe Firefly, bulk AI image generation, Adobe Firefly automation tool, mass image generation Firefly, batch AI art creation, Adobe Firefly API alternative, bulk creative automation, automated Firefly workflow, Firefly batch image generator, Adobe AI bulk processing, mass produce AI images, Firefly automation script, bulk Firefly images tool
 
 ---
 
@@ -451,6 +454,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 **[⬆ back to top](#firewerk-)**
 
-Made with 🔥 by the FireWerk team
+**Adobe Firefly Bulk Generation Made Easy** - Process hundreds of AI images automatically
 
 </div>
