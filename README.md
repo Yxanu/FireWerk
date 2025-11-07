@@ -10,8 +10,9 @@ Automate Adobe Firefly image generation at scale. Batch process hundreds of prom
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-orange.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
+[![Website](https://img.shields.io/badge/website-firewerk.tosa.io-FF6B3E)](https://firewerk.tosa.io/)
 
-[Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Web UI](#web-ui) • [CLI](#cli-usage)
+[Features](#features) • [Quick Start](#quick-start) • [Documentation](#documentation) • [Web UI](#web-ui) • [CLI](#cli-usage) • [Website](https://firewerk.tosa.io/)
 
 **Keywords**: Adobe Firefly automation, bulk image generation, batch AI art, Firefly API alternative, automated creative workflow, mass image generation, AI batch processing
 
