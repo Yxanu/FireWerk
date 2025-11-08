@@ -417,9 +417,10 @@ export class ImageGenerator extends BaseGenerator {
     try {
       // Look for the model selector button - it might be labeled as "Firefly Image 3" or similar
       const modelButtonSelectors = [
-        this.page.getByRole('button', { name: /firefly image|model|flux|gemini|imagen|gpt|runway/i }),
+        this.page.getByRole('button', { name: /firefly image|model|flux|gemini|imagen|ideogram|gpt|runway/i }),
         this.page.locator('button[aria-label*="model"], button[aria-label*="Modell"]'),
         this.page.locator('button:has-text("Firefly Image")'),
+        this.page.locator('button:has-text("Ideogram")'),
       ];
 
       let modelButton = null;
