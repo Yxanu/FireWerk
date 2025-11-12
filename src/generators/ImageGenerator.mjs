@@ -34,10 +34,9 @@ export class ImageGenerator extends BaseGenerator {
     await promptBox.waitFor({ timeout: 15000, state: 'visible' }); // Increased timeout
     console.log('[DEBUG] Prompt textarea is visible and ready');
 
-    // Select model if specified
-    if (this.config.model) {
-      await this.selectModel(this.config.model);
-    }
+    // Disable Fast mode first to enable access to all models
+    // IMPORTANT: This must happen BEFORE processing prompts, but model selection should happen LAST
+    await this.disableFastMode();
 
     // Ensure output directory exists
     await this.ensureDir(this.config.outputDir);
@@ -51,6 +50,12 @@ export class ImageGenerator extends BaseGenerator {
       // Set aspect ratio if specified
       if (item.aspect_ratio) {
         console.log(`[DEBUG] Attempting to set aspect ratio to: ${item.aspect_ratio}`);
+
+        // Take screenshot BEFORE setting aspect ratio
+        const beforeRatioShot = `./data/debug-before-ratio-${this.safeName(id)}.png`;
+        await this.page.screenshot({ path: beforeRatioShot, fullPage: true });
+        console.log(`[DEBUG] Screenshot saved: ${beforeRatioShot}`);
+
         let ratioSet = false;
 
         try {
@@ -91,6 +96,11 @@ export class ImageGenerator extends BaseGenerator {
 
           if (!ratioSet) {
             console.log(`[WARN] Could not set aspect ratio to ${item.aspect_ratio} - aspect ratio button not found`);
+          } else {
+            // Take screenshot AFTER setting aspect ratio
+            const afterRatioShot = `./data/debug-after-ratio-${this.safeName(id)}.png`;
+            await this.page.screenshot({ path: afterRatioShot, fullPage: true });
+            console.log(`[DEBUG] Screenshot saved: ${afterRatioShot}`);
           }
         } catch (err) {
           console.log(`[WARN] Failed to set aspect ratio: ${err.message}`);
@@ -99,6 +109,14 @@ export class ImageGenerator extends BaseGenerator {
 
       // Set content type/style if specified
       if (item.style) {
+        console.log(`[DEBUG] Attempting to set style to: ${item.style}`);
+
+        // Take screenshot BEFORE setting style
+        const beforeStyleShot = `./data/debug-before-style-${this.safeName(id)}.png`;
+        await this.page.screenshot({ path: beforeStyleShot, fullPage: true });
+        console.log(`[DEBUG] Screenshot saved: ${beforeStyleShot}`);
+
+        let styleSet = false;
         try {
           const styleSelectors = [
             this.page.getByLabel(/content type|style/i),
@@ -109,11 +127,19 @@ export class ImageGenerator extends BaseGenerator {
               await selector.first().click({ timeout: 2000 });
               await this.page.getByText(item.style, { exact: false }).first().click({ timeout: 2000 });
               console.log(`[INFO] Set content type to ${item.style}`);
+              styleSet = true;
               await this.page.waitForTimeout(500);
               break;
             } catch {}
           }
         } catch {}
+
+        if (styleSet) {
+          // Take screenshot AFTER setting style
+          const afterStyleShot = `./data/debug-after-style-${this.safeName(id)}.png`;
+          await this.page.screenshot({ path: afterStyleShot, fullPage: true });
+          console.log(`[DEBUG] Screenshot saved: ${afterStyleShot}`);
+        }
       }
 
       // Re-acquire prompt box after settings changes and fill it
@@ -125,6 +151,20 @@ export class ImageGenerator extends BaseGenerator {
       await currentPromptBox.fill(item.prompt_text);
       console.log(`[DEBUG] Filled prompt: ${item.prompt_text.substring(0, 80)}...`);
       await this.page.waitForTimeout(1000);
+
+      // Select model LAST (right before generation) to prevent it from reverting
+      // This is critical because model selection appears to be session-based and doesn't persist
+      if (this.config.model) {
+        console.log(`[INFO] Selecting model immediately before generation: ${this.config.model}`);
+        await this.selectModel(this.config.model);
+        // Give UI extra time to register the model selection
+        await this.page.waitForTimeout(1500);
+      }
+
+      // Take screenshot AFTER model selection to show final state before generation
+      const beforeGenShot = `./data/debug-before-generation-${this.safeName(id)}.png`;
+      await this.page.screenshot({ path: beforeGenShot, fullPage: true });
+      console.log(`[DEBUG] Screenshot saved: ${beforeGenShot}`);
 
       // Wait for generate button to be enabled
       const genBtn = this.page.getByTestId('generate-button');
@@ -411,45 +451,119 @@ export class ImageGenerator extends BaseGenerator {
     }
   }
 
+  async disableFastMode() {
+    console.log('[INFO] Checking Fast mode setting and enabling all models...');
+
+    try {
+      // First, expand the General settings section if it's collapsed
+      const generalSettingsHeader = this.page.locator('text=/General settings/i').first();
+      const isGeneralSettingsVisible = await generalSettingsHeader.isVisible({ timeout: 3000 }).catch(() => false);
+
+      if (isGeneralSettingsVisible) {
+        // Check if General settings is expanded by looking for the Fast mode switch
+        const fastModeVisible = await this.page.locator('sp-switch').filter({ hasText: /fast mode/i }).isVisible({ timeout: 1000 }).catch(() => false);
+
+        if (!fastModeVisible) {
+          console.log('[INFO] Expanding General settings...');
+          await generalSettingsHeader.click();
+          await this.page.waitForTimeout(500);
+        }
+      }
+
+      // Strategy 1: Try clicking the "Use Firefly Image 5 (preview)" badge/link
+      // This badge can toggle access to all models
+      const firefly5Badge = this.page.locator('firefly-link-info-card, [class*="link-info"]').filter({ hasText: /firefly image 5.*preview|use.*firefly.*5/i }).first();
+      const isBadgeVisible = await firefly5Badge.isVisible({ timeout: 2000 }).catch(() => false);
+
+      if (isBadgeVisible) {
+        console.log('[INFO] Found Firefly Image 5 preview badge, clicking to enable all models...');
+        await firefly5Badge.click();
+        await this.page.waitForTimeout(2000);
+        console.log('[INFO] Clicked Firefly 5 badge to enable all models');
+
+        // Take a screenshot to verify
+        await this.page.screenshot({ path: './data/debug-firefly5-badge-clicked.png', fullPage: true });
+        console.log('[DEBUG] Screenshot saved: ./data/debug-firefly5-badge-clicked.png');
+        return; // Success, no need to try Fast mode toggle
+      }
+
+      // Strategy 2: Try the Fast mode sp-switch toggle
+      const fastModeSwitch = this.page.locator('sp-switch').filter({ hasText: /fast mode/i }).first();
+      const isSwitchVisible = await fastModeSwitch.isVisible({ timeout: 2000 }).catch(() => false);
+
+      if (!isSwitchVisible) {
+        console.log('[INFO] Fast mode toggle and Firefly 5 badge not found - all models may already be available');
+        return;
+      }
+
+      console.log('[DEBUG] Found Fast mode sp-switch');
+
+      // Check if Fast mode is currently enabled by checking the 'checked' attribute
+      const isChecked = await fastModeSwitch.evaluate(el => el.hasAttribute('checked'));
+
+      if (isChecked) {
+        console.log('[INFO] Fast mode is ON, disabling it to access all models...');
+        await fastModeSwitch.click();
+        await this.page.waitForTimeout(2000); // Wait for UI to update and models to reload
+        console.log('[INFO] Fast mode disabled successfully');
+
+        // Take a screenshot to verify
+        await this.page.screenshot({ path: './data/debug-fast-mode-disabled.png', fullPage: true });
+        console.log('[DEBUG] Screenshot saved: ./data/debug-fast-mode-disabled.png');
+      } else {
+        console.log('[INFO] Fast mode is already OFF');
+      }
+    } catch (err) {
+      console.log(`[WARN] Could not toggle Fast mode: ${err.message}`);
+    }
+  }
+
   async selectModel(modelName) {
     console.log(`[INFO] Selecting model: ${modelName}`);
 
     try {
-      // Look for the model selector button - it might be labeled as "Firefly Image 3" or similar
-      const modelButtonSelectors = [
-        this.page.getByRole('button', { name: /firefly image|model|flux|gemini|imagen|ideogram|gpt|runway/i }),
-        this.page.locator('button[aria-label*="model"], button[aria-label*="Modell"]'),
-        this.page.locator('button:has-text("Firefly Image")'),
-        this.page.locator('button:has-text("Ideogram")'),
-      ];
+      // Look for the model sp-picker component
+      const modelPicker = this.page.locator('sp-picker').filter({ hasText: /firefly image|model/i }).first();
 
-      let modelButton = null;
-      for (const selector of modelButtonSelectors) {
-        try {
-          const btn = selector.first();
-          if (await btn.isVisible({ timeout: 2000 })) {
-            modelButton = btn;
-            break;
-          }
-        } catch {}
-      }
+      const isPickerVisible = await modelPicker.isVisible({ timeout: 3000 }).catch(() => false);
 
-      if (!modelButton) {
-        console.log('[WARN] Could not find model selector button');
+      if (!isPickerVisible) {
+        console.log('[WARN] Could not find model selector sp-picker');
         return;
       }
 
       // Click to open the model menu
-      await modelButton.click();
-      console.log('[DEBUG] Clicked model selector button');
+      await modelPicker.click();
+      console.log('[DEBUG] Clicked model selector sp-picker');
       await this.page.waitForTimeout(1000);
 
-      // Click on the desired model
-      const modelOption = this.page.getByText(modelName, { exact: false }).first();
-      await modelOption.waitFor({ timeout: 5000, state: 'visible' });
-      await modelOption.click();
-      console.log(`[INFO] Selected model: ${modelName}`);
-      await this.page.waitForTimeout(2000);
+      // Look for the model option in the menu - try exact match first, then partial
+      const modelOptionSelectors = [
+        this.page.getByText(modelName, { exact: true }),
+        this.page.getByText(modelName, { exact: false }),
+        this.page.locator(`sp-menu-item:has-text("${modelName}")`),
+      ];
+
+      let modelSelected = false;
+      for (const selector of modelOptionSelectors) {
+        try {
+          const option = selector.first();
+          await option.waitFor({ timeout: 3000, state: 'visible' });
+          await option.click();
+          console.log(`[INFO] Selected model: ${modelName}`);
+          modelSelected = true;
+          // Wait for UI to process model selection (reliability over speed)
+          await this.page.waitForTimeout(1000);
+          break;
+        } catch {}
+      }
+
+      if (!modelSelected) {
+        console.log(`[WARN] Could not find model option "${modelName}" in dropdown`);
+        // Take a screenshot for debugging
+        await this.page.screenshot({ path: `./data/debug-model-not-found-${this.safeName(modelName)}.png`, fullPage: true });
+        console.log(`[DEBUG] Screenshot saved: ./data/debug-model-not-found-${this.safeName(modelName)}.png`);
+      }
 
     } catch (err) {
       console.log(`[WARN] Failed to select model "${modelName}": ${err.message}`);
