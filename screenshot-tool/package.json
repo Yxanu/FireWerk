@@ -1,0 +1,22 @@
+{
+  "name": "website-screenshot-tool",
+  "version": "1.0.0",
+  "description": "Automated website screenshot capture tool for local and deployed sites",
+  "type": "module",
+  "main": "capture.mjs",
+  "scripts": {
+    "capture": "node capture.mjs",
+    "example": "node capture.mjs --url http://localhost:3000 --output ./screenshots"
+  },
+  "keywords": [
+    "screenshot",
+    "playwright",
+    "automation",
+    "website"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

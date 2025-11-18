@@ -5,7 +5,7 @@ import path from 'path';
 export class ImageGenerator extends BaseGenerator {
   constructor(config = {}) {
     super({
-      url: 'https://firefly.adobe.com/generate/images',
+      url: 'https://firefly.adobe.com/generate/image',
       waitAfterClick: Number(process.env.POST_CLICK_WAIT_MS || 15000),
       variantsPerPrompt: Number(process.env.VARIANTS_PER_PROMPT || 1),
       captureMode: 'screenshot', // 'screenshot' or 'download'
@@ -34,9 +34,9 @@ export class ImageGenerator extends BaseGenerator {
     await promptBox.waitFor({ timeout: 15000, state: 'visible' }); // Increased timeout
     console.log('[DEBUG] Prompt textarea is visible and ready');
 
-    // Disable Fast mode first to enable access to all models
-    // IMPORTANT: This must happen BEFORE processing prompts, but model selection should happen LAST
-    await this.disableFastMode();
+    // Enable all models by clicking Firefly 5 banner FIRST
+    // CRITICAL: This must happen BEFORE processing prompts
+    await this.enableAllModels();
 
     // Ensure output directory exists
     await this.ensureDir(this.config.outputDir);
@@ -47,74 +47,22 @@ export class ImageGenerator extends BaseGenerator {
       const id = item.prompt_id || item.id || `item_${Math.random().toString(36).slice(2,8)}`;
       console.log(`\n[INFO] 🪄 Prompt: ${id}`);
 
-      // Set aspect ratio if specified
-      if (item.aspect_ratio) {
-        console.log(`[DEBUG] Attempting to set aspect ratio to: ${item.aspect_ratio}`);
-
-        // Take screenshot BEFORE setting aspect ratio
-        const beforeRatioShot = `./data/debug-before-ratio-${this.safeName(id)}.png`;
-        await this.page.screenshot({ path: beforeRatioShot, fullPage: true });
-        console.log(`[DEBUG] Screenshot saved: ${beforeRatioShot}`);
-
-        let ratioSet = false;
-
-        try {
-          // Try multiple selector strategies for the aspect ratio button
-          const ratioSelectors = [
-            // Try by button role with aspect ratio text
-            this.page.locator('button').filter({ hasText: /aspect.*ratio|ratio/i }),
-            // Try by aria-label
-            this.page.getByLabel(/aspect|ratio/i),
-            // Try by data attributes
-            this.page.locator('[data-testid*="aspect"]'),
-            // Try generic button near aspect ratio text
-            this.page.locator('text=/aspect.*ratio/i').locator('..').locator('button'),
-          ];
-
-          for (let i = 0; i < ratioSelectors.length; i++) {
-            try {
-              const selector = ratioSelectors[i];
-              console.log(`[DEBUG] Trying aspect ratio selector strategy ${i + 1}...`);
-
-              // Wait for and click the aspect ratio dropdown/button
-              await selector.first().click({ timeout: 2000 });
-              console.log(`[DEBUG] Clicked aspect ratio button with strategy ${i + 1}`);
-              await this.page.waitForTimeout(300);
-
-              // Try to find and click the specific ratio option
-              const ratioOption = this.page.getByText(item.aspect_ratio, { exact: false });
-              await ratioOption.first().click({ timeout: 2000 });
-              console.log(`[INFO] Set aspect ratio to ${item.aspect_ratio}`);
-
-              ratioSet = true;
-              await this.page.waitForTimeout(500);
-              break;
-            } catch (err) {
-              console.log(`[DEBUG] Aspect ratio strategy ${i + 1} failed: ${err.message}`);
-            }
-          }
-
-          if (!ratioSet) {
-            console.log(`[WARN] Could not set aspect ratio to ${item.aspect_ratio} - aspect ratio button not found`);
-          } else {
-            // Take screenshot AFTER setting aspect ratio
-            const afterRatioShot = `./data/debug-after-ratio-${this.safeName(id)}.png`;
-            await this.page.screenshot({ path: afterRatioShot, fullPage: true });
-            console.log(`[DEBUG] Screenshot saved: ${afterRatioShot}`);
-          }
-        } catch (err) {
-          console.log(`[WARN] Failed to set aspect ratio: ${err.message}`);
-        }
+      // STEP 1: Select model FIRST (this determines which controls appear)
+      if (this.config.model) {
+        console.log(`[INFO] Selecting model: ${this.config.model}`);
+        await this.selectModel(this.config.model);
+        // Wait for UI to update after model selection
+        await this.page.waitForTimeout(1500);
       }
 
-      // Set content type/style if specified
+      // STEP 2: Set aspect ratio (only appears AFTER model selection for certain models)
+      if (item.aspect_ratio) {
+        await this.setAspectRatio(item.aspect_ratio, id);
+      }
+
+      // STEP 3: Set content type/style if specified
       if (item.style) {
         console.log(`[DEBUG] Attempting to set style to: ${item.style}`);
-
-        // Take screenshot BEFORE setting style
-        const beforeStyleShot = `./data/debug-before-style-${this.safeName(id)}.png`;
-        await this.page.screenshot({ path: beforeStyleShot, fullPage: true });
-        console.log(`[DEBUG] Screenshot saved: ${beforeStyleShot}`);
 
         let styleSet = false;
         try {
@@ -126,23 +74,16 @@ export class ImageGenerator extends BaseGenerator {
             try {
               await selector.first().click({ timeout: 2000 });
               await this.page.getByText(item.style, { exact: false }).first().click({ timeout: 2000 });
-              console.log(`[INFO] Set content type to ${item.style}`);
+              console.log(`[INFO] ✓ Set content type to ${item.style}`);
               styleSet = true;
               await this.page.waitForTimeout(500);
               break;
             } catch {}
           }
         } catch {}
-
-        if (styleSet) {
-          // Take screenshot AFTER setting style
-          const afterStyleShot = `./data/debug-after-style-${this.safeName(id)}.png`;
-          await this.page.screenshot({ path: afterStyleShot, fullPage: true });
-          console.log(`[DEBUG] Screenshot saved: ${afterStyleShot}`);
-        }
       }
 
-      // Re-acquire prompt box after settings changes and fill it
+      // STEP 4: Fill the prompt
       const currentPromptBox = this.page.locator('textarea[placeholder*="Describe"], textarea').first();
       await currentPromptBox.waitFor({ timeout: 10000, state: 'visible' });
       await currentPromptBox.click();
@@ -151,15 +92,6 @@ export class ImageGenerator extends BaseGenerator {
       await currentPromptBox.fill(item.prompt_text);
       console.log(`[DEBUG] Filled prompt: ${item.prompt_text.substring(0, 80)}...`);
       await this.page.waitForTimeout(1000);
-
-      // Select model LAST (right before generation) to prevent it from reverting
-      // This is critical because model selection appears to be session-based and doesn't persist
-      if (this.config.model) {
-        console.log(`[INFO] Selecting model immediately before generation: ${this.config.model}`);
-        await this.selectModel(this.config.model);
-        // Give UI extra time to register the model selection
-        await this.page.waitForTimeout(1500);
-      }
 
       // Take screenshot AFTER model selection to show final state before generation
       const beforeGenShot = `./data/debug-before-generation-${this.safeName(id)}.png`;
@@ -451,70 +383,112 @@ export class ImageGenerator extends BaseGenerator {
     }
   }
 
-  async disableFastMode() {
-    console.log('[INFO] Checking Fast mode setting and enabling all models...');
+  async enableAllModels() {
+    console.log('[INFO] Enabling access to all models by clicking Firefly 5 banner...');
 
     try {
-      // First, expand the General settings section if it's collapsed
-      const generalSettingsHeader = this.page.locator('text=/General settings/i').first();
-      const isGeneralSettingsVisible = await generalSettingsHeader.isVisible({ timeout: 3000 }).catch(() => false);
+      // SINGLE CLICK on firefly-link-info-card unlocks ALL partner models
+      // Based on screenshot evidence from user's recording
 
-      if (isGeneralSettingsVisible) {
-        // Check if General settings is expanded by looking for the Fast mode switch
-        const fastModeVisible = await this.page.locator('sp-switch').filter({ hasText: /fast mode/i }).isVisible({ timeout: 1000 }).catch(() => false);
+      const firefly5Banner = this.page.locator('firefly-link-info-card').first();
+      const isBannerVisible = await firefly5Banner.isVisible({ timeout: 3000 }).catch(() => false);
 
-        if (!fastModeVisible) {
-          console.log('[INFO] Expanding General settings...');
-          await generalSettingsHeader.click();
-          await this.page.waitForTimeout(500);
+      if (isBannerVisible) {
+        console.log('[INFO] Clicking Firefly 5 banner to unlock all partner models...');
+        await firefly5Banner.click();
+        await this.page.waitForTimeout(2000); // Wait for models to load
+        console.log('[INFO] ✓ All partner models unlocked');
+
+        // Take screenshot to verify
+        await this.page.screenshot({ path: './data/debug-firefly5-enabled.png', fullPage: false });
+        console.log('[DEBUG] Screenshot saved: ./data/debug-firefly5-enabled.png');
+        return true;
+      } else {
+        console.log('[INFO] Firefly 5 banner not visible - partner models may already be enabled');
+        return false;
+      }
+    } catch (err) {
+      console.log(`[WARN] Could not click Firefly 5 banner: ${err.message}`);
+      // Don't fail - models might already be enabled
+      return false;
+    }
+  }
+
+  async setAspectRatio(aspectRatio, promptId) {
+    console.log(`[DEBUG] Attempting to set aspect ratio to: ${aspectRatio}`);
+
+    // Map common aspect ratio formats to UI text
+    const aspectRatioMap = {
+      '1:1': 'Square (1:1)',
+      'square': 'Square (1:1)',
+      '4:3': 'Landscape (4:3)',
+      'landscape': 'Landscape (4:3)',
+      '3:4': 'Portrait (3:4)',
+      'portrait': 'Portrait (3:4)',
+      '16:9': 'Widescreen (16:9)',
+      'widescreen': 'Widescreen (16:9)',
+    };
+
+    const targetRatio = aspectRatioMap[aspectRatio.toLowerCase()] || aspectRatio;
+    console.log(`[DEBUG] Mapped aspect ratio: "${aspectRatio}" -> "${targetRatio}"`);
+
+    try {
+      // Wait for aspect ratio controls to appear (they show after model selection)
+      await this.page.waitForTimeout(500);
+
+      // Get all sp-pickers - aspect ratio is typically the second one
+      const allPickers = await this.page.locator('sp-picker').all();
+
+      let aspectRatioPicker = null;
+
+      // Try to find the aspect ratio picker by checking text content
+      for (const picker of allPickers) {
+        const text = await picker.textContent().catch(() => '');
+        if (text.includes('Landscape') || text.includes('Square') || text.includes('Portrait') || text.includes('Widescreen')) {
+          aspectRatioPicker = picker;
+          break;
         }
       }
 
-      // Strategy 1: Try clicking the "Use Firefly Image 5 (preview)" badge/link
-      // This badge can toggle access to all models
-      const firefly5Badge = this.page.locator('firefly-link-info-card, [class*="link-info"]').filter({ hasText: /firefly image 5.*preview|use.*firefly.*5/i }).first();
-      const isBadgeVisible = await firefly5Badge.isVisible({ timeout: 2000 }).catch(() => false);
-
-      if (isBadgeVisible) {
-        console.log('[INFO] Found Firefly Image 5 preview badge, clicking to enable all models...');
-        await firefly5Badge.click();
-        await this.page.waitForTimeout(2000);
-        console.log('[INFO] Clicked Firefly 5 badge to enable all models');
-
-        // Take a screenshot to verify
-        await this.page.screenshot({ path: './data/debug-firefly5-badge-clicked.png', fullPage: true });
-        console.log('[DEBUG] Screenshot saved: ./data/debug-firefly5-badge-clicked.png');
-        return; // Success, no need to try Fast mode toggle
+      if (!aspectRatioPicker) {
+        console.log(`[INFO] Aspect ratio controls not available for this model`);
+        return false;
       }
 
-      // Strategy 2: Try the Fast mode sp-switch toggle
-      const fastModeSwitch = this.page.locator('sp-switch').filter({ hasText: /fast mode/i }).first();
-      const isSwitchVisible = await fastModeSwitch.isVisible({ timeout: 2000 }).catch(() => false);
+      console.log(`[DEBUG] Found aspect ratio sp-picker`);
 
-      if (!isSwitchVisible) {
-        console.log('[INFO] Fast mode toggle and Firefly 5 badge not found - all models may already be available');
-        return;
+      // Close any open menus by pressing Escape
+      await this.page.keyboard.press('Escape');
+      await this.page.waitForTimeout(300);
+
+      // Click to open the aspect ratio dropdown
+      await aspectRatioPicker.click({ force: true });
+      console.log(`[DEBUG] Clicked aspect ratio dropdown`);
+
+      // Wait for dropdown animation and verify it opened
+      await this.page.waitForTimeout(1000);
+
+      // Take screenshot of open aspect ratio dropdown
+      await this.page.screenshot({ path: './data/debug-aspect-ratio-dropdown.png', fullPage: true });
+      console.log('[DEBUG] Screenshot: ./data/debug-aspect-ratio-dropdown.png');
+
+      // Select the target aspect ratio using sp-menu-item:has-text
+      try {
+        const option = this.page.locator(`sp-menu-item:has-text("${targetRatio}")`).first();
+        await option.waitFor({ timeout: 3000, state: 'visible' });
+        console.log(`[DEBUG] Found aspect ratio option: ${targetRatio}`);
+        await option.click({ timeout: 2000 });
+        console.log(`[INFO] ✓ Set aspect ratio to ${targetRatio}`);
+        await this.page.waitForTimeout(500);
+        return true;
+      } catch (err) {
+        console.log(`[WARN] Could not select aspect ratio ${targetRatio}: ${err.message}`);
+        return false;
       }
 
-      console.log('[DEBUG] Found Fast mode sp-switch');
-
-      // Check if Fast mode is currently enabled by checking the 'checked' attribute
-      const isChecked = await fastModeSwitch.evaluate(el => el.hasAttribute('checked'));
-
-      if (isChecked) {
-        console.log('[INFO] Fast mode is ON, disabling it to access all models...');
-        await fastModeSwitch.click();
-        await this.page.waitForTimeout(2000); // Wait for UI to update and models to reload
-        console.log('[INFO] Fast mode disabled successfully');
-
-        // Take a screenshot to verify
-        await this.page.screenshot({ path: './data/debug-fast-mode-disabled.png', fullPage: true });
-        console.log('[DEBUG] Screenshot saved: ./data/debug-fast-mode-disabled.png');
-      } else {
-        console.log('[INFO] Fast mode is already OFF');
-      }
     } catch (err) {
-      console.log(`[WARN] Could not toggle Fast mode: ${err.message}`);
+      console.log(`[INFO] Aspect ratio not available for this model: ${err.message}`);
+      return false;
     }
   }
 
@@ -522,12 +496,30 @@ export class ImageGenerator extends BaseGenerator {
     console.log(`[INFO] Selecting model: ${modelName}`);
 
     try {
-      // Look for the model sp-picker component
-      const modelPicker = this.page.locator('sp-picker').filter({ hasText: /firefly image|model/i }).first();
+      // Model name mappings for common variations
+      const modelNameMap = {
+        'Flux 1.1 Pro': 'FLUX1.1 [pro]',
+        'flux 1.1 pro': 'FLUX1.1 [pro]',
+        'Flux 1.1 Pro Ultra': 'FLUX1.1 [pro] Ultra',
+        'Firefly Image 5': 'Firefly Image 5 (preview)',
+        'Firefly 5': 'Firefly Image 5 (preview)',
+        'GPT Image': 'GPT Image',
+        'Imagen 4': 'Imagen 4',
+        'Imagen 3': 'Imagen 3',
+        'Ideogram 3.0': 'Ideogram 3.0',
+        'Firefly Image 3': 'Firefly Image 3',
+        'Firefly Image 2': 'Firefly Image 2',
+        'Gemini 2.5 (Nano Banana)': 'Nano Banana',
+        'Nano Banana': 'Nano Banana',
+      };
 
-      const isPickerVisible = await modelPicker.isVisible({ timeout: 3000 }).catch(() => false);
+      const targetModelName = modelNameMap[modelName] || modelName;
+      console.log(`[DEBUG] Mapped model name: "${modelName}" -> "${targetModelName}"`);
 
-      if (!isPickerVisible) {
+      // Look for the model sp-picker (first one is the model selector)
+      const modelPicker = this.page.locator('sp-picker').first();
+
+      if (!await modelPicker.isVisible({ timeout: 3000 })) {
         console.log('[WARN] Could not find model selector sp-picker');
         return;
       }
@@ -535,34 +527,46 @@ export class ImageGenerator extends BaseGenerator {
       // Click to open the model menu
       await modelPicker.click();
       console.log('[DEBUG] Clicked model selector sp-picker');
-      await this.page.waitForTimeout(1000);
 
-      // Look for the model option in the menu - try exact match first, then partial
-      const modelOptionSelectors = [
-        this.page.getByText(modelName, { exact: true }),
-        this.page.getByText(modelName, { exact: false }),
-        this.page.locator(`sp-menu-item:has-text("${modelName}")`),
-      ];
-
-      let modelSelected = false;
-      for (const selector of modelOptionSelectors) {
-        try {
-          const option = selector.first();
-          await option.waitFor({ timeout: 3000, state: 'visible' });
-          await option.click();
-          console.log(`[INFO] Selected model: ${modelName}`);
-          modelSelected = true;
-          // Wait for UI to process model selection (reliability over speed)
-          await this.page.waitForTimeout(1000);
-          break;
-        } catch {}
+      // CRITICAL: Wait for the menu to actually open
+      // Verify the menu opened by checking aria-expanded attribute
+      try {
+        await this.page.waitForFunction(
+          () => {
+            const picker = document.querySelector('sp-picker');
+            return picker && picker.getAttribute('aria-expanded') === 'true';
+          },
+          { timeout: 3000 }
+        );
+        console.log('[DEBUG] Model menu is now open (aria-expanded=true)');
+      } catch {
+        console.log('[WARN] Could not verify menu opened, proceeding anyway...');
       }
 
-      if (!modelSelected) {
-        console.log(`[WARN] Could not find model option "${modelName}" in dropdown`);
+      // Wait for dropdown animation to complete
+      await this.page.waitForTimeout(1500);
+
+      // Take screenshot of open dropdown
+      await this.page.screenshot({ path: './data/debug-model-dropdown-open.png', fullPage: true });
+      console.log('[DEBUG] Screenshot saved: ./data/debug-model-dropdown-open.png');
+
+      // Look for the model option using sp-menu-item:has-text selector (most reliable)
+      try {
+        const option = this.page.locator(`sp-menu-item:has-text("${targetModelName}")`).first();
+        await option.waitFor({ timeout: 5000, state: 'visible' });
+        console.log(`[DEBUG] Found model option: ${targetModelName}`);
+        await option.click({ timeout: 3000 });
+        console.log(`[INFO] ✓ Clicked model: ${targetModelName}`);
+
+        // Wait for UI to process model selection and update controls
+        await this.page.waitForTimeout(2000);
+
+        console.log(`[INFO] ✓ Model selected: ${targetModelName}`);
+      } catch (err) {
+        console.log(`[WARN] Could not find model option "${targetModelName}" in dropdown: ${err.message}`);
         // Take a screenshot for debugging
-        await this.page.screenshot({ path: `./data/debug-model-not-found-${this.safeName(modelName)}.png`, fullPage: true });
-        console.log(`[DEBUG] Screenshot saved: ./data/debug-model-not-found-${this.safeName(modelName)}.png`);
+        await this.page.screenshot({ path: `./data/debug-model-not-found-${this.safeName(targetModelName)}.png`, fullPage: true });
+        console.log(`[DEBUG] Screenshot saved: ./data/debug-model-not-found-${this.safeName(targetModelName)}.png`);
       }
 
     } catch (err) {

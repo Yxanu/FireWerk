@@ -28,13 +28,54 @@ export class SpeechGenerator extends BaseGenerator {
     await this.ensureDir(this.config.outputDir);
 
     // Process each prompt
-    for (const item of prompts) {
+    for (let i = 0; i < prompts.length; i++) {
+      const item = prompts[i];
       const id = item.prompt_id || item.id || `speech_${Math.random().toString(36).slice(2,8)}`;
       console.log(`\n[INFO] 🎙️  Speech: ${id}`);
 
+      // Reload page before each prompt (except first) to clear old audio history
+      if (i > 0) {
+        console.log('[DEBUG] Reloading page to clear previous audio...');
+        await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        await this.page.waitForTimeout(3000);
+        await this.dismissCookieBanner();
+      }
+
       // Find and fill the text input for speech
-      const textInput = this.page.locator('textarea, input[type="text"]').first();
-      await textInput.waitFor({ timeout: 10000, state: 'visible' });
+      console.log('[DEBUG] Looking for text input field...');
+
+      // Try multiple selector strategies
+      let textInput = null;
+      const selectors = [
+        'textarea',
+        'textarea.spectrum-Textfield-input',
+        '[contenteditable="true"]',
+        'input[type="text"]',
+        '[role="textbox"]',
+        '[placeholder*="text" i], [placeholder*="prompt" i]'
+      ];
+
+      for (const selector of selectors) {
+        try {
+          console.log(`[DEBUG] Trying selector: ${selector}`);
+          const element = this.page.locator(selector).first();
+          await element.waitFor({ timeout: 3000, state: 'visible' });
+          textInput = element;
+          console.log(`[DEBUG] Found text input with selector: ${selector}`);
+          break;
+        } catch (err) {
+          console.log(`[DEBUG] Selector ${selector} failed: ${err.message}`);
+        }
+      }
+
+      if (!textInput) {
+        // Debug: show what's actually on the page
+        console.log('[ERROR] Could not find text input. Page content:');
+        const pageText = await this.page.evaluate(() => document.body.innerText);
+        console.log(pageText.substring(0, 500));
+        throw new Error('Text input not found on speech page');
+      }
+
       await textInput.click();
       await this.page.waitForTimeout(500);
       await textInput.fill('');
@@ -70,13 +111,46 @@ export class SpeechGenerator extends BaseGenerator {
       }
 
       // Find and click the generate/create button
-      const generateBtn = this.page.locator('button:has-text("Generate"), button:has-text("Create")').first();
+      console.log('[DEBUG] Looking for generate button...');
 
-      try {
-        await generateBtn.waitFor({ timeout: 5000, state: 'visible' });
-        console.log('[INFO] Generate button is ready');
-      } catch {
-        console.log('[WARN] Generate button not found, trying anyway...');
+      let generateBtn = null;
+      const buttonSelectors = [
+        'button:has-text("Generate")',
+        'button:has-text("Create")',
+        'button[type="submit"]',
+        '[role="button"]:has-text("Generate")',
+        '[role="button"]:has-text("Create")',
+        'button.spectrum-Button--cta',
+        'button[aria-label*="Generate" i]',
+        'button[aria-label*="Create" i]'
+      ];
+
+      for (const selector of buttonSelectors) {
+        try {
+          console.log(`[DEBUG] Trying button selector: ${selector}`);
+          const button = this.page.locator(selector).first();
+          await button.waitFor({ timeout: 2000, state: 'visible' });
+          generateBtn = button;
+          console.log(`[DEBUG] Found generate button with selector: ${selector}`);
+          break;
+        } catch (err) {
+          console.log(`[DEBUG] Button selector ${selector} failed`);
+        }
+      }
+
+      if (!generateBtn) {
+        // Debug: show all buttons on the page
+        console.log('[ERROR] Could not find generate button. Available buttons:');
+        const buttonTexts = await this.page.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+          return buttons.slice(0, 10).map(b => ({
+            text: b.textContent?.trim().substring(0, 50),
+            aria: b.getAttribute('aria-label'),
+            type: b.tagName
+          }));
+        });
+        console.log(JSON.stringify(buttonTexts, null, 2));
+        throw new Error('Generate button not found on speech page');
       }
 
       // Dismiss cookie banner before clicking
@@ -102,72 +176,134 @@ export class SpeechGenerator extends BaseGenerator {
   }
 
   async captureAudio(id) {
-    console.log('[INFO] Looking for generated audio in DOM...');
+    console.log('[INFO] Waiting for audio generation to complete...');
 
     try {
-      // Wait for audio player or download button
-      await this.page.waitForSelector('audio, button:has-text("Download"), a[download]', { timeout: 15000 });
+      // Dismiss credit dialog first if present
+      try {
+        const creditDialog = this.page.locator('[data-testid="credit-cost-dialog"]');
+        if (await creditDialog.isVisible({ timeout: 2000 })) {
+          console.log('[DEBUG] Credit dialog detected, dismissing...');
 
-      // Try to find download button
-      const downloadBtn = this.page.locator('button:has-text("Download"), a[download]').first();
+          const closeButtonSelectors = [
+            '[data-testid="credit-cost-dialog"] button[aria-label*="close" i]',
+            '[data-testid="credit-cost-dialog"] button[aria-label*="dismiss" i]',
+            '[data-testid="credit-cost-dialog"] sp-button:has-text("Got it")',
+            '[data-testid="credit-cost-dialog"] sp-button:has-text("OK")',
+            '[data-testid="credit-cost-dialog"] button:has-text("Got it")',
+            '[data-testid="credit-cost-dialog"] button:has-text("OK")',
+            '[data-testid="credit-cost-dialog"] [role="button"]'
+          ];
 
-      if (await downloadBtn.isVisible({ timeout: 2000 })) {
-        console.log('[INFO] Found download button, attempting to download...');
-
-        // Set up download handling
-        const downloadPromise = this.page.waitForEvent('download');
-        await downloadBtn.click();
-        const download = await downloadPromise;
-
-        // Save the downloaded file
-        const outPath = path.join(this.config.outputDir, `${this.safeName(id)}.${download.suggestedFilename().split('.').pop()}`);
-        await download.saveAs(outPath);
-        console.log(`[INFO] 💾 Saved ${path.basename(outPath)}`);
-        return;
-      }
-
-      // If no download button, try to find audio element and extract src
-      const audioSrc = await this.page.evaluate(() => {
-        const audio = document.querySelector('audio');
-        return audio ? audio.src : null;
-      });
-
-      if (audioSrc) {
-        console.log(`[INFO] Found audio element with src: ${audioSrc.substring(0, 80)}...`);
-
-        if (audioSrc.startsWith('blob:') || audioSrc.startsWith('data:')) {
-          // For blob URLs, we need to fetch the content
-          const audioBuffer = await this.page.evaluate(async (src) => {
-            const response = await fetch(src);
-            const blob = await response.blob();
-            const arrayBuffer = await blob.arrayBuffer();
-            return Array.from(new Uint8Array(arrayBuffer));
-          }, audioSrc);
-
-          const buffer = Buffer.from(audioBuffer);
-          const outPath = path.join(this.config.outputDir, `${this.safeName(id)}.mp3`);
-          await fs.writeFile(outPath, buffer);
-          console.log(`[INFO] 💾 Saved ${path.basename(outPath)} (${Math.round(buffer.length/1024)} KB)`);
-        } else {
-          // Regular HTTP URL - navigate and download
-          const response = await this.page.goto(audioSrc);
-          const audioBuffer = await response.body();
-
-          const ext = audioSrc.includes('.wav') ? 'wav' : 'mp3';
-          const outPath = path.join(this.config.outputDir, `${this.safeName(id)}.${ext}`);
-          await fs.writeFile(outPath, audioBuffer);
-          console.log(`[INFO] 💾 Saved ${path.basename(outPath)} (${Math.round(audioBuffer.length/1024)} KB)`);
-
-          // Go back
-          await this.page.goBack();
+          for (const selector of closeButtonSelectors) {
+            try {
+              const closeBtn = this.page.locator(selector).first();
+              await closeBtn.waitFor({ timeout: 1000, state: 'visible' });
+              await closeBtn.click();
+              await this.page.waitForTimeout(500);
+              console.log('[DEBUG] Dialog dismissed');
+              break;
+            } catch (err) {
+              // Try next selector
+            }
+          }
         }
-      } else {
-        console.warn(`[WARN] No audio found for ${id}`);
+      } catch (err) {
+        console.log('[DEBUG] No credit dialog detected');
       }
+
+      // Wait for audio generation to complete by waiting for NEW audio card to appear
+      // The Generate button should become disabled during generation, then a new audio card appears
+      console.log('[DEBUG] Waiting for new audio card to appear...');
+
+      // Get count of existing audio cards before waiting
+      const initialCardCount = await this.page.locator('[role="listitem"]').count();
+      console.log(`[DEBUG] Initial audio cards: ${initialCardCount}`);
+
+      // Wait for a new audio card to appear (count increases)
+      // OR wait for the Generate button to become enabled again (generation complete)
+      try {
+        await this.page.waitForFunction(
+          (expectedCount) => {
+            const cards = document.querySelectorAll('[role="listitem"]');
+            return cards.length > expectedCount;
+          },
+          initialCardCount,
+          { timeout: 30000 }
+        );
+        console.log('[DEBUG] New audio card detected');
+      } catch (err) {
+        console.log('[WARN] Timeout waiting for new audio card, continuing anyway...');
+      }
+
+      // Give it a moment to fully render
+      await this.page.waitForTimeout(2000);
+
+      // Now look for the Download button in the preview/playback area
+      console.log('[DEBUG] Looking for Download button...');
+      const downloadButtonSelectors = [
+        'button:has-text("Download")',
+        'sp-button:has-text("Download")',
+        '[aria-label*="Download" i]',
+        'button:has-text("Herunterladen")',
+        'sp-button:has-text("Herunterladen")'
+      ];
+
+      let downloadButton = null;
+      for (const selector of downloadButtonSelectors) {
+        try {
+          console.log(`[DEBUG] Trying download button selector: ${selector}`);
+          const button = this.page.locator(selector).first();
+          await button.waitFor({ timeout: 3000, state: 'visible' });
+
+          const isDisabled = await button.isDisabled().catch(() => false);
+          if (isDisabled) {
+            console.log(`[DEBUG] Button found but disabled: ${selector}`);
+            continue;
+          }
+
+          downloadButton = button;
+          console.log(`[DEBUG] Found Download button with selector: ${selector}`);
+          break;
+        } catch (err) {
+          console.log(`[DEBUG] Download button selector ${selector} not found`);
+        }
+      }
+
+      if (!downloadButton) {
+        const debugScreenshotPath = path.join(this.config.outputDir, `debug-no-download-${id}.png`);
+        await this.page.screenshot({ path: debugScreenshotPath });
+        console.log(`[DEBUG] Screenshot saved to ${debugScreenshotPath}`);
+        throw new Error('Download button not found in preview area');
+      }
+
+      // Click Download button
+      console.log('[INFO] Clicking Download button...');
+      const downloadPromise = this.page.waitForEvent('download', { timeout: 30000 });
+      await downloadButton.scrollIntoViewIfNeeded();
+      await this.page.waitForTimeout(500);
+      await downloadButton.click();
+
+      console.log('[INFO] Waiting for download...');
+      const download = await downloadPromise;
+
+      const suggestedName = download.suggestedFilename();
+      const ext = suggestedName.split('.').pop() || 'wav';
+      const outPath = path.join(this.config.outputDir, `${this.safeName(id)}.${ext}`);
+      await download.saveAs(outPath);
+      console.log(`[INFO] 💾 Saved ${path.basename(outPath)}`);
 
     } catch (err) {
       console.error(`[ERROR] Failed to capture audio: ${err.message}`);
       console.warn(`[WARN] No audio captured for ${id}`);
+
+      try {
+        const debugScreenshotPath = path.join(this.config.outputDir, `debug-error-${id}.png`);
+        await this.page.screenshot({ path: debugScreenshotPath });
+        console.log(`[DEBUG] Error screenshot saved to ${debugScreenshotPath}`);
+      } catch (screenshotErr) {
+        // Ignore screenshot errors
+      }
     }
   }
 }
