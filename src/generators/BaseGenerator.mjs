@@ -1,12 +1,33 @@
 import { chromium } from 'playwright';
 import fs from 'fs/promises';
 
+const AUTH_FRAME_HOSTS = [
+  'auth-light.identity.adobe.com',
+  'auth.services.adobe.com',
+  'adobeid.adobe.com'
+];
+
+const SIGN_IN_SELECTORS = [
+  'button:has-text("Sign in")',
+  'a:has-text("Sign in")',
+  'button:has-text("Sign In")',
+  'a:has-text("Sign In")',
+  '[data-testid="sign-in-button"]',
+  '[aria-label*="Sign in"]',
+  '[aria-label*="Sign In"]',
+  'firefly-sign-in-dialog'
+];
+
 export class BaseGenerator {
   constructor(config = {}) {
     this.config = {
-      headless: (process.env.PW_HEADLESS ?? process.env.HEADLESS ?? 'true') === 'true',
+      headless: (process.env.PW_HEADLESS ?? process.env.HEADLESS ?? 'false') === 'true',
       storageState: process.env.STORAGE_STATE || './data/storageState.json',
       outputDir: process.env.OUTPUT_DIR || './output',
+      viewport: {
+        width: Number(process.env.PW_VIEWPORT_W || 1440),
+        height: Number(process.env.PW_VIEWPORT_H || 960)
+      },
       ...config
     };
 
@@ -18,9 +39,11 @@ export class BaseGenerator {
   async init() {
     this.browser = await chromium.launch({ headless: this.config.headless });
 
-    const contextOptions = { viewport: { width: 1366, height: 900 } };
+    const contextOptions = {
+      viewport: this.config.viewport,
+      acceptDownloads: true
+    };
 
-    // Try to load storage state if it exists
     try {
       await fs.access(this.config.storageState);
       contextOptions.storageState = this.config.storageState;
@@ -31,15 +54,12 @@ export class BaseGenerator {
 
     this.context = await this.browser.newContext(contextOptions);
     this.page = await this.context.newPage();
+  }
 
-    // Move window off-screen if not headless
-    if (!this.config.headless) {
-      try {
-        await this.page.evaluate(() => {
-          window.moveTo(2000, 0);
-        });
-      } catch {}
-    }
+  async openPage(url, options = {}) {
+    const waitUntil = options.waitUntil || 'domcontentloaded';
+    const timeout = options.timeout || 60000;
+    await this.page.goto(url, { waitUntil, timeout });
   }
 
   async dismissCookieBanner() {
@@ -47,61 +67,77 @@ export class BaseGenerator {
       const consentButton = this.page.locator('#onetrust-accept-btn-handler, button:has-text("Accept"), button:has-text("Enable all")').first();
       if (await consentButton.isVisible({ timeout: 2000 })) {
         await consentButton.click({ force: true });
+        await this.page.waitForTimeout(500);
         console.log('[INFO] Dismissed cookie consent banner');
-        await this.page.waitForTimeout(1000);
         return true;
       }
-    } catch {}
+    } catch {
+      // Ignore cookie-banner misses.
+    }
+
     return false;
   }
 
-  async checkLogin() {
-    // Wait a bit for page to settle after navigation
-    await this.page.waitForTimeout(2000);
+  hasAuthenticationFrame() {
+    return this.page.frames().some((frame) =>
+      AUTH_FRAME_HOSTS.some((host) => frame.url().includes(host))
+    );
+  }
 
-    // Check multiple indicators of being logged in
-    const signInSelectors = [
-      'button:has-text("Sign in")',
-      'a:has-text("Sign in")',
-      '[data-testid="sign-in-button"]',
-      '[aria-label*="Sign in"]'
-    ];
-
-    let signInVisible = false;
-    for (const selector of signInSelectors) {
+  async isSignInVisible(timeout = 1000) {
+    for (const selector of SIGN_IN_SELECTORS) {
       try {
-        const el = this.page.locator(selector).first();
-        if (await el.isVisible({ timeout: 1500 })) {
-          signInVisible = true;
-          break;
+        if (await this.page.locator(selector).first().isVisible({ timeout })) {
+          return true;
         }
-      } catch {}
+      } catch {
+        // Try next selector.
+      }
     }
 
-    if (signInVisible) {
-      console.log('[INFO] Sign in control visible - not logged in');
+    return false;
+  }
+
+  async hasAuthenticatedUi(timeout = 2000) {
+    const checks = await Promise.allSettled([
+      this.page.getByTestId('generate-button').isVisible({ timeout }),
+      this.page.locator('textarea, [role="textbox"][contenteditable="true"]').first().isVisible({ timeout }),
+      this.page.locator('[aria-label*="account"], [aria-label*="profile"], [data-testid*="avatar"], [data-testid*="account"]').first().isVisible({ timeout })
+    ]);
+
+    return checks.some((result) => result.status === 'fulfilled' && result.value === true);
+  }
+
+  async checkLogin() {
+    await this.page.waitForTimeout(1000);
+
+    if (this.hasAuthenticationFrame()) {
+      console.log('[INFO] Authentication iframe detected - not logged in');
       return false;
     }
 
-    const generateBtnVisible = await this.page.getByTestId('generate-button').isVisible({ timeout: 3000 }).catch(() => false);
-    const avatarVisible = await this.page.locator('[aria-label*="account"], [aria-label*="profile"], [data-testid*="avatar"], [data-testid*="account"]').isVisible({ timeout: 2000 }).catch(() => false);
+    if (await this.isSignInVisible(1200)) {
+      console.log('[INFO] Sign-in UI visible - not logged in');
+      return false;
+    }
 
-    // If we see the generate button, we're logged in
-    if (generateBtnVisible || avatarVisible) {
-      console.log('[INFO] Already logged in - authenticated UI detected');
+    if (await this.hasAuthenticatedUi(1800)) {
+      console.log('[INFO] Authenticated UI detected');
       return true;
     }
 
-    // If no sign in button and no generate button yet, might be loading
-    await this.page.waitForTimeout(3000);
-    const genBtnAfterWait = await this.page.getByTestId('generate-button').isVisible({ timeout: 5000 }).catch(() => false);
-    if (genBtnAfterWait) {
-      console.log('[INFO] Already logged in - generate button appeared after wait');
-      return true;
+    await this.page.waitForTimeout(2000);
+    return !(await this.isSignInVisible(800)) && await this.hasAuthenticatedUi(1800);
+  }
+
+  async getAuthFrame() {
+    for (const frame of this.page.frames()) {
+      if (AUTH_FRAME_HOSTS.some((host) => frame.url().includes(host))) {
+        return frame;
+      }
     }
 
-    console.log('[INFO] Not logged in - will need to authenticate');
-    return false;
+    return null;
   }
 
   async login(email) {
@@ -109,89 +145,146 @@ export class BaseGenerator {
     console.log('🔐 Starting automated login...');
     console.log('==============================================\n');
 
-    // Step 1: Click "Continue with email" button
     try {
-      const continueWithEmailBtn = this.page.locator('button:has-text("Continue with email")').first();
-      await continueWithEmailBtn.waitFor({ timeout: 5000, state: 'visible' });
-      await continueWithEmailBtn.click();
-      console.log('[INFO] Clicked "Continue with email"');
-      await this.page.waitForTimeout(2000);
-    } catch (err) {
-      console.log('[WARN] Could not find "Continue with email" button, trying direct email input...');
+      const signInBtn = this.page.getByRole('button', { name: /^sign\s*in$/i }).first();
+      if (await signInBtn.isVisible({ timeout: 3000 })) {
+        await signInBtn.click();
+        await this.page.waitForTimeout(2000);
+      }
+    } catch {
+      // The page may already be on the auth step.
     }
 
-    // Step 2: Fill in email
+    const authFrame = await this.getAuthFrame();
+    const scope = authFrame || this.page;
+
     try {
-      const emailInput = this.page.locator('input[type="email"], input[name="username"]').first();
+      const continueWithEmailBtn = scope.locator('button:has-text("Continue with email"), a:has-text("Continue with email")').first();
+      if (await continueWithEmailBtn.isVisible({ timeout: 3000 })) {
+        await continueWithEmailBtn.click();
+        await this.page.waitForTimeout(1500);
+      }
+    } catch {
+      // Some auth states land directly on the email field.
+    }
+
+    try {
+      const emailInput = scope.locator('input[type="email"], input[name="username"], input[id*="email"]').first();
       await emailInput.waitFor({ timeout: 10000, state: 'visible' });
       await emailInput.fill(email);
-      console.log(`[INFO] Filled email: ${email}`);
-      await this.page.waitForTimeout(1000);
 
-      // Step 3: Click Continue button
-      const continueBtn = this.page.locator('button:has-text("Continue"), button[type="submit"]').first();
-      await continueBtn.click();
-      console.log('[INFO] Clicked "Continue" button');
-      await this.page.waitForTimeout(2000);
-    } catch (err) {
-      console.log(`[ERROR] Failed to fill email or click continue: ${err.message}`);
+      const continueBtn = scope.locator('button:has-text("Continue"), button[type="submit"]').first();
+      if (await continueBtn.isVisible({ timeout: 3000 })) {
+        await continueBtn.click();
+      }
+    } catch (error) {
+      console.log(`[WARN] Email autofill/login continue failed: ${error.message}`);
     }
 
-    // Step 4: Extract 2FA number and wait for approval
-    await this.page.waitForTimeout(3000);
-
-    let twoFANumber = 'unknown';
-    try {
-      // Try to extract the 2FA number from the page
-      twoFANumber = await this.page.evaluate(() => {
-        // Look for various patterns that might contain the number
-        const bodyText = document.body.innerText;
-
-        // Pattern: "Press XX on your device"
-        let match = bodyText.match(/(?:Press|Enter|Type)\s+(\d{2})/i);
-        if (match) return match[1];
-
-        // Pattern: standalone 2-digit number in large text
-        const elements = document.querySelectorAll('h1, h2, h3, .number, [class*="code"], [class*="number"]');
-        for (const el of elements) {
-          const text = el.textContent.trim();
-          if (/^\d{2}$/.test(text)) return text;
-        }
-
-        return null;
-      });
-    } catch (err) {
-      console.log('[WARN] Could not extract 2FA number from page');
-    }
-
+    const twoFANumber = await this.extractTwoFactorNumber(authFrame);
     console.log('\n==============================================');
     console.log('📱 PLEASE APPROVE IN ADOBE ACCESS APP');
-    if (twoFANumber && twoFANumber !== 'unknown') {
+    if (twoFANumber) {
       console.log(`🔢 Press the number: ${twoFANumber}`);
     } else {
       console.log('Press the number shown on screen in your Access app');
     }
     console.log('==============================================\n');
 
-    // Wait for the "Sign in" button to disappear (means logged in)
-    try {
-      await this.page.locator('button:has-text("Sign in"), [data-testid="sign-in-button"], [aria-label*="Sign in"]').waitFor({ state: 'hidden', timeout: 120000 });
-    } catch {}
-
-    console.log('✅ Login successful!');
-
-    // Save storage state
-    await this.context.storageState({ path: this.config.storageState });
-    console.log(`[INFO] Saved storage state to ${this.config.storageState}`);
+    await this.waitForLoginCompletion();
+    await this.saveStorageState();
   }
 
-  async ensureDir(path) {
-    await fs.mkdir(path, { recursive: true });
+  async extractTwoFactorNumber(authFrame) {
+    const scopes = [authFrame, this.page].filter(Boolean);
+
+    for (const scope of scopes) {
+      try {
+        const code = await scope.evaluate(() => {
+          const bodyText = document.body.innerText;
+          const match = bodyText.match(/(?:Press|Enter|Type)\s+(\d{2})/i);
+          if (match) return match[1];
+
+          const elements = document.querySelectorAll('h1, h2, h3, .number, [class*="code"], [class*="number"]');
+          for (const element of elements) {
+            const text = element.textContent.trim();
+            if (/^\d{2}$/.test(text)) return text;
+          }
+
+          return null;
+        });
+
+        if (code) {
+          return code;
+        }
+      } catch {
+        // Try the next scope.
+      }
+    }
+
+    return null;
+  }
+
+  async waitForLoginCompletion() {
+    try {
+      await this.page.waitForFunction(
+        () => {
+          const hasGenerateBtn = Boolean(document.querySelector('[data-testid="generate-button"]'));
+          const hasPrompt = Boolean(document.querySelector('textarea, [role="textbox"][contenteditable="true"]'));
+          const signInCopy = document.body.innerText.toLowerCase().includes('sign in');
+          return (hasGenerateBtn || hasPrompt) && !signInCopy;
+        },
+        { timeout: 120000 }
+      );
+      console.log('✅ Login successful!');
+      return;
+    } catch {
+      // Fall back to slower checks below.
+    }
+
+    await this.page.waitForTimeout(3000);
+    if (await this.checkLogin()) {
+      console.log('✅ Login successful!');
+      return;
+    }
+
+    console.log('[WARN] Login completion check timed out, continuing with current session state');
+  }
+
+  async ensureAuthenticatedSession(email, url) {
+    await this.openPage(url);
+    await this.dismissCookieBanner();
+
+    if (await this.checkLogin()) {
+      return true;
+    }
+
+    await this.login(email);
+    await this.openPage(url);
+    await this.dismissCookieBanner();
+    return this.checkLogin();
+  }
+
+  async saveStorageState() {
+    try {
+      const storageStatePath = this.config.storageState;
+      const dir = storageStatePath.includes('/') ? storageStatePath.slice(0, storageStatePath.lastIndexOf('/')) : '.';
+      await fs.mkdir(dir, { recursive: true });
+      await this.context.storageState({ path: storageStatePath });
+      console.log(`[INFO] Saved storage state to ${storageStatePath}`);
+    } catch (error) {
+      console.log(`[WARN] Could not save storage state: ${error.message}`);
+    }
+  }
+
+  async ensureDir(targetPath) {
+    await fs.mkdir(targetPath, { recursive: true });
   }
 
   async close() {
     if (this.browser) {
       await this.browser.close();
+      this.browser = null;
     }
   }
 

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <header>
+      <h1>Generate image</h1>
+      <button type="button">Get Credits</button>
+    </header>
+
+    <aside>
+      <h2>General settings</h2>
+      <div>Model</div>
+      <sp-picker aria-label="Model">
+        <span>Firefly Image 5 (Preview)</span>
+      </sp-picker>
+    </aside>
+
+    <main>
+      <section>
+        <h3>Start generating images</h3>
+      </section>
+    </main>
+
+    <footer style="position: fixed; bottom: 0; left: 0; right: 0;">
+      <div>Prompt</div>
+      <firefly-prompt data-testid="prompt-bar-input"></firefly-prompt>
+      <button data-testid="generate-button" disabled>Generate</button>
+    </footer>
+  </body>
+</html>

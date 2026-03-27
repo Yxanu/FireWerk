@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <section>
+      <label for="model-picker">Model</label>
+      <sp-picker id="model-picker" aria-label="Model">
+        <span>Firefly Image 5 (Preview)</span>
+      </sp-picker>
+    </section>
+
+    <section>
+      <label for="aspect-picker">Aspect Ratio</label>
+      <sp-picker id="aspect-picker" aria-label="Aspect Ratio">
+        <span>Square (1:1)</span>
+      </sp-picker>
+    </section>
+
+    <section>
+      <label for="style-picker">Content Type</label>
+      <sp-picker id="style-picker" aria-label="Content Type">
+        <span>Photographic</span>
+      </sp-picker>
+    </section>
+
+    <firefly-prompt data-testid="prompt-bar-input">
+      <textarea placeholder="Describe what you want to generate"></textarea>
+    </firefly-prompt>
+
+    <button data-testid="generate-button">Generate</button>
+  </body>
+</html>

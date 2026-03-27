@@ -1,169 +1,235 @@
-import { BaseGenerator } from './BaseGenerator.mjs';
 import fs from 'fs/promises';
 import path from 'path';
+import { BaseGenerator } from './BaseGenerator.mjs';
+import {
+  resolveImageModel,
+  validateImageRequest,
+  normalizeAspectRatio,
+  normalizeStyle
+} from '../models/imageModelCatalog.mjs';
+import {
+  PROMPT_INPUT_SELECTORS,
+  MODEL_PICKER_SELECTORS,
+  ASPECT_RATIO_PICKER_SELECTORS,
+  STYLE_PICKER_SELECTORS,
+  GENERATE_BUTTON_SELECTORS,
+  RESULT_IMAGE_SELECTORS,
+  DOWNLOAD_BUTTON_SELECTORS,
+  findFirstVisibleLocator,
+  findPickerByHints,
+  findOptionByTexts,
+  buildModelOptionTexts,
+  findPartnerConsentButton
+} from './imageSelectors.mjs';
+import {
+  detectFireflyGeneratePageState,
+  FIREFLY_PAGE_STATES
+} from './fireflyPageState.mjs';
+import { buildOutPath } from '../utils/files.js';
+import { RunArtifacts } from '../utils/runArtifacts.mjs';
+
+const ASPECT_RATIO_OPTION_TEXT = {
+  '1:1': ['Square (1:1)', 'Square', '1:1'],
+  '4:5': ['Portrait (4:5)', 'Portrait', '4:5'],
+  '16:9': ['Widescreen (16:9)', 'Landscape', '16:9']
+};
+
+const STYLE_OPTION_TEXT = {
+  photographic: ['Photographic', 'Photo'],
+  art: ['Art', 'Artistic'],
+  graphic: ['Graphic', 'Editorial']
+};
 
 export class ImageGenerator extends BaseGenerator {
   constructor(config = {}) {
     super({
       url: 'https://firefly.adobe.com/generate/image',
-      waitAfterClick: Number(process.env.POST_CLICK_WAIT_MS || 15000),
+      waitForResultTimeoutMs: Number(process.env.WAIT_FOR_RESULT_TIMEOUT_MS || 90000),
       variantsPerPrompt: Number(process.env.VARIANTS_PER_PROMPT || 1),
-      captureMode: 'screenshot', // 'screenshot' or 'download'
+      captureMode: process.env.CAPTURE_MODE || 'download',
+      saveArtifacts: process.env.SAVE_ARTIFACTS || 'failures',
+      debugRunDir: process.env.DEBUG_RUN_DIR || '',
       ...config
     });
+
+    this.progress = null;
+    this.runArtifacts = null;
   }
 
   async generate(prompts, email = process.env.FIREFLY_EMAIL || 'web@adam-medien.de') {
+    const totalVariants = prompts.length * this.config.variantsPerPrompt;
+
+    this.progress = {
+      status: 'running',
+      phase: 'initializing',
+      totalPrompts: prompts.length,
+      totalVariants,
+      processedPrompts: 0,
+      generatedVariants: 0,
+      capturesSucceeded: 0,
+      fallbackCount: 0,
+      currentPromptId: null,
+      currentVariant: null,
+      lastError: null
+    };
+
+    this.runArtifacts = new RunArtifacts({
+      outputDir: this.config.outputDir,
+      baseDir: this.config.debugRunDir || undefined,
+      saveArtifacts: this.config.saveArtifacts
+    });
+
+    await this.runArtifacts.init({
+      generator: 'ImageGenerator',
+      model: this.config.model || this.config.modelId || null,
+      captureMode: this.config.captureMode,
+      totalPrompts: prompts.length,
+      totalVariants
+    });
+
     await this.init();
-    await this.page.goto(this.config.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await this.page.waitForTimeout(8000); // Increased from 5s to 8s
-
-    await this.dismissCookieBanner();
-
-    // Check if login is needed
-    const isLoggedIn = await this.checkLogin();
-    if (!isLoggedIn) {
-      await this.login(email);
-      // After login, wait longer for the page to fully load
-      await this.page.waitForTimeout(5000);
-    }
-
-    // Verify prompt textarea is ready
-    console.log('[DEBUG] Verifying prompt textarea is ready...');
-    const promptBox = this.page.locator('textarea').first();
-    await promptBox.waitFor({ timeout: 15000, state: 'visible' }); // Increased timeout
-    console.log('[DEBUG] Prompt textarea is visible and ready');
-
-    // Enable all models by clicking Firefly 5 banner FIRST
-    // CRITICAL: This must happen BEFORE processing prompts
-    await this.enableAllModels();
-
-    // Ensure output directory exists
     await this.ensureDir(this.config.outputDir);
 
-    // Process each prompt
-    for (let i = 0; i < prompts.length; i++) {
-      const item = prompts[i];
-      const id = item.prompt_id || item.id || `item_${Math.random().toString(36).slice(2,8)}`;
-      console.log(`\n[INFO] 🪄 Prompt: ${id}`);
+    try {
+      const authenticated = await this.ensureAuthenticatedSession(email, this.config.url);
+      if (!authenticated) {
+        throw new Error('Authentication did not reach an authenticated Firefly session');
+      }
+      await this.ensurePageReady();
 
-      // STEP 1: Select model FIRST (this determines which controls appear)
-      if (this.config.model) {
-        console.log(`[INFO] Selecting model: ${this.config.model}`);
-        await this.selectModel(this.config.model);
-        // Wait for UI to update after model selection
-        await this.page.waitForTimeout(1500);
+      for (const prompt of prompts) {
+        await this.processPrompt(prompt);
       }
 
-      // STEP 2: Set aspect ratio (only appears AFTER model selection for certain models)
-      if (item.aspect_ratio) {
-        await this.setAspectRatio(item.aspect_ratio, id);
-      }
-
-      // STEP 3: Set content type/style if specified
-      if (item.style) {
-        console.log(`[DEBUG] Attempting to set style to: ${item.style}`);
-
-        let styleSet = false;
-        try {
-          const styleSelectors = [
-            this.page.getByLabel(/content type|style/i),
-            this.page.locator('[aria-label*="Content Type"]'),
-          ];
-          for (const selector of styleSelectors) {
-            try {
-              await selector.first().click({ timeout: 2000 });
-              await this.page.getByText(item.style, { exact: false }).first().click({ timeout: 2000 });
-              console.log(`[INFO] ✓ Set content type to ${item.style}`);
-              styleSet = true;
-              await this.page.waitForTimeout(500);
-              break;
-            } catch {}
-          }
-        } catch {}
-      }
-
-      // STEP 4: Fill the prompt
-      const currentPromptBox = this.page.locator('textarea[placeholder*="Describe"], textarea').first();
-      await currentPromptBox.waitFor({ timeout: 10000, state: 'visible' });
-      await currentPromptBox.click();
-      await this.page.waitForTimeout(500);
-      await currentPromptBox.fill('');
-      await currentPromptBox.fill(item.prompt_text);
-      console.log(`[DEBUG] Filled prompt: ${item.prompt_text.substring(0, 80)}...`);
-      await this.page.waitForTimeout(1000);
-
-      // Take screenshot AFTER model selection to show final state before generation
-      const beforeGenShot = `./data/debug-before-generation-${this.safeName(id)}.png`;
-      await this.page.screenshot({ path: beforeGenShot, fullPage: true });
-      console.log(`[DEBUG] Screenshot saved: ${beforeGenShot}`);
-
-      // Wait for generate button to be enabled
-      const genBtn = this.page.getByTestId('generate-button');
-      try {
-        await this.page.waitForFunction(
-          () => {
-            const btn = document.querySelector('[data-testid="generate-button"]');
-            return btn && !btn.hasAttribute('aria-disabled') && btn.getAttribute('aria-disabled') !== 'true';
-          },
-          { timeout: 10000 }
-        );
-        console.log('[INFO] Generate button is enabled');
-      } catch {
-        console.log('[WARN] Generate button may be disabled, trying anyway...');
-      }
-
-      // Generate variants
-      for (let v = 1; v <= this.config.variantsPerPrompt; v++) {
-        // Dismiss cookie banner before clicking
-        await this.dismissCookieBanner();
-        await this.closeBlockingOverlays();
-
-        // Click generate button - try keyboard shortcut or click
-        console.log('[DEBUG] Attempting to trigger generation...');
-
-        const generationStarted = await this.triggerGeneration(id);
-
-        if (!generationStarted) {
-          console.log('[WARN] UI did not change after trigger attempts');
-          const failureShot = `./data/debug-click-failed-${this.safeName(id)}-${v}.png`;
-          await this.page.screenshot({ path: failureShot });
-          console.log(`[DEBUG] Saved screenshot: ${failureShot}`);
-        } else {
-          console.log('[DEBUG] Generation start confirmed');
-        }
-
-        console.log(`[INFO] Waiting ${this.config.waitAfterClick/1000}s for image generation...`);
-        await this.page.waitForTimeout(this.config.waitAfterClick);
-
-        // Take a debug screenshot after generation wait
-        await this.page.screenshot({ path: `./data/debug-after-gen-${this.safeName(id)}-${v}.png` });
-        console.log(`[DEBUG] Post-generation screenshot saved to ./data/debug-after-gen-${this.safeName(id)}-${v}.png`);
-
-        // Capture image based on mode
-        if (this.config.captureMode === 'download') {
-          await this.captureViaDownload(id, v);
-        } else {
-          await this.captureImage(id, v);
-        }
-
-        await this.page.waitForTimeout(1500);
-      }
-
-      await this.page.waitForTimeout(2000);
-
-      // Report progress
-      if (this.config.onProgress) {
-        this.config.onProgress(i + 1);
-      }
+      this.progress.status = 'completed';
+      this.progress.phase = 'completed';
+      await this.runArtifacts.writeSummary({
+        progress: this.progress,
+        status: 'completed'
+      });
+    } catch (error) {
+      this.progress.status = 'failed';
+      this.progress.phase = 'failed';
+      this.progress.lastError = error.message;
+      this.runArtifacts.recordError(error, { scope: 'generate' });
+      await this.collectDiagnostics('run-failure', error, { mode: 'failure' });
+      await this.runArtifacts.writeSummary({
+        progress: this.progress,
+        status: 'failed'
+      });
+      throw error;
     }
-
-    console.log('\n✅ All prompts processed');
   }
 
-  async closeBlockingOverlays() {
-    // Attempt to close any onboarding or tooltip overlays that steal clicks
+  emitProgress(overrides = {}) {
+    this.progress = {
+      ...this.progress,
+      ...overrides
+    };
+
+    if (this.config.onProgress) {
+      this.config.onProgress({ ...this.progress });
+    }
+  }
+
+  async processPrompt(item) {
+    const promptId = item.prompt_id || item.id || `item_${Math.random().toString(36).slice(2, 8)}`;
+    const promptText = item.prompt_text || item.prompt || item.visual_prompt || '';
+    const requestedModel = item.modelId || item.model || this.config.modelId || this.config.model || '';
+    const requestedAspectRatio = item.aspect_ratio || item.aspectRatio || this.config.aspectRatio || '';
+    const requestedStyle = item.style || this.config.style || '';
+
+    const validation = validateImageRequest({
+      modelId: requestedModel,
+      model: requestedModel,
+      aspectRatio: requestedAspectRatio,
+      style: requestedStyle
+    });
+
+    if (!validation.ok) {
+      throw new Error(`Prompt "${promptId}" is invalid: ${validation.errors.join('; ')}`);
+    }
+
+    const model = validation.normalized.model || resolveImageModel('Firefly Image 5 (Preview)');
+    const aspectRatio = normalizeAspectRatio(validation.normalized.aspectRatio);
+    const style = normalizeStyle(validation.normalized.style);
+
+    this.emitProgress({
+      phase: 'processing-prompt',
+      currentPromptId: promptId,
+      currentVariant: null
+    });
+    this.runArtifacts.recordPromptPhase(promptId, 'start', { modelId: model?.id || null });
+
+    await this.openGenerateImage();
+    await this.dismissOverlays();
+    await this.ensurePageReady();
+    await this.ensureModelAvailable(model, promptId);
+    await this.selectModel(model, promptId);
+    await this.applyPrompt(promptText, promptId);
+    await this.applyCapabilities({ model, aspectRatio, style, promptId });
+
+    for (let variant = 1; variant <= this.config.variantsPerPrompt; variant++) {
+      await this.generateVariant({
+        promptId,
+        promptText,
+        model,
+        aspectRatio,
+        style,
+        variant
+      });
+    }
+
+    this.emitProgress({
+      processedPrompts: this.progress.processedPrompts + 1,
+      currentVariant: null
+    });
+    this.runArtifacts.recordPromptPhase(promptId, 'completed', {
+      processedPrompts: this.progress.processedPrompts
+    });
+  }
+
+  async openGenerateImage() {
+    this.emitProgress({ phase: 'open-generate-image' });
+    await this.openPage(this.config.url);
+    await this.dismissCookieBanner();
+  }
+
+  async ensurePageReady() {
+    this.emitProgress({ phase: 'ensure-page-ready' });
+    const pageState = await this.detectPageState();
+
+    if (pageState.matchedState === FIREFLY_PAGE_STATES.AUTH_GATE || pageState.hasAuthFrame) {
+      throw new Error('Firefly state: authentication gate blocking prompt input');
+    }
+
+    if (pageState.matchedState === FIREFLY_PAGE_STATES.CREDIT_GATE) {
+      throw new Error('Firefly state: credit gate blocking generation');
+    }
+
+    if (pageState.matchedState === FIREFLY_PAGE_STATES.LOADING) {
+      await this.page.waitForTimeout(1500);
+    }
+
+    const promptField = await this.findPromptField();
+    if (!promptField) {
+      const detail = pageState.hasPromptShell
+        ? 'prompt shell found but no editable node'
+        : 'no prompt shell detected';
+      throw new Error(`Firefly state: ${pageState.matchedState}, ${detail}`);
+    }
+
+    this.runArtifacts.recordSelector('prompt-input', promptField.strategy.name, {
+      inputMode: promptField.inputMode || 'fill'
+    });
+  }
+
+  async dismissOverlays() {
+    this.emitProgress({ phase: 'dismiss-overlays' });
+    await this.dismissCookieBanner();
+
     const overlaySelectors = [
+      'firefly-sign-in-dialog button[aria-label*="Close" i]',
       'button[aria-label="Close"]',
       'button:has-text("Dismiss")',
       'button:has-text("Got it")',
@@ -173,128 +239,389 @@ export class ImageGenerator extends BaseGenerator {
       '[aria-label*="Close"]:not([disabled])'
     ];
 
-    for (let pass = 0; pass < 3; pass++) {
-      let closedAny = false;
-      for (const selector of overlaySelectors) {
-        try {
-          const el = this.page.locator(selector).first();
-          if (await el.isVisible({ timeout: 500 }).catch(() => false)) {
-            await el.click({ force: true });
-            await this.page.waitForTimeout(300);
-            console.log(`[INFO] Closed blocking overlay via selector: ${selector}`);
-            closedAny = true;
-          }
-        } catch {}
-      }
-
-      if (!closedAny) {
-        break;
+    for (const selector of overlaySelectors) {
+      try {
+        const locator = this.page.locator(selector).first();
+        if (await locator.isVisible({ timeout: 600 })) {
+          await locator.click({ force: true });
+          this.runArtifacts.recordEvent('overlay-closed', { selector });
+          await this.page.waitForTimeout(250);
+        }
+      } catch {
+        // Overlay not present.
       }
     }
   }
 
+  async ensureModelAvailable(model, promptId) {
+    this.emitProgress({ phase: 'ensure-model-available' });
+    if (!model) {
+      return;
+    }
+
+    if (model.family === 'partner' || model.id === 'firefly-image-5-preview') {
+      const banner = this.page.locator('firefly-link-info-card').first();
+      try {
+        if (await banner.isVisible({ timeout: 1500 })) {
+          await banner.click();
+          this.runArtifacts.recordFallback('activation-banner', {
+            promptId,
+            modelId: model.id
+          });
+          await this.page.waitForTimeout(500);
+        }
+      } catch {
+        // Banner is optional.
+      }
+    }
+  }
+
+  async selectModel(model, promptId) {
+    if (!model) {
+      return;
+    }
+
+    this.emitProgress({ phase: 'select-model' });
+    const picker = await this.findPicker(MODEL_PICKER_SELECTORS, ['model', 'firefly', 'flux', 'imagen', 'gpt']);
+    if (!picker) {
+      throw new Error(`Model picker not found for prompt "${promptId}"`);
+    }
+
+    this.runArtifacts.recordSelector('model-picker', picker.strategy.name, { promptId, modelId: model.id });
+    await picker.locator.scrollIntoViewIfNeeded();
+    await picker.locator.click({ force: true });
+
+    const option = await findOptionByTexts(this.page, buildModelOptionTexts(model), { timeoutMs: 4000 });
+    if (!option) {
+      throw new Error(`Model option "${model.label}" not found`);
+    }
+
+    this.runArtifacts.recordSelector('model-option', option.name, { promptId, modelId: model.id });
+    await option.locator.click({ force: true });
+    await this.confirmPartnerConsentIfPresent(promptId, model);
+    await this.page.waitForTimeout(300);
+  }
+
+  async applyPrompt(promptText, promptId) {
+    this.emitProgress({ phase: 'apply-prompt' });
+    const promptField = await this.findPromptField();
+    if (!promptField) {
+      throw new Error(`Prompt input not found for prompt "${promptId}"`);
+    }
+
+    const { locator, strategy } = promptField;
+    this.runArtifacts.recordSelector('prompt-apply', strategy.name, { promptId });
+    await locator.scrollIntoViewIfNeeded();
+    await locator.click({ force: true });
+
+    if (promptField.inputMode === 'keyboard') {
+      try {
+        await this.page.keyboard.press('Meta+A');
+      } catch {
+        await this.page.keyboard.press('Control+A').catch(() => {});
+      }
+      await this.page.keyboard.press('Backspace').catch(() => {});
+      await this.page.keyboard.type(promptText, { delay: 12 });
+      return;
+    }
+
+    try {
+      await locator.fill('');
+      await locator.fill(promptText);
+    } catch {
+      await locator.evaluate((element, text) => {
+        if ('value' in element) {
+          element.value = text;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+        } else {
+          element.textContent = text;
+          element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+        }
+      }, promptText);
+    }
+  }
+
+  async applyCapabilities({ model, aspectRatio, style, promptId }) {
+    this.emitProgress({ phase: 'apply-capabilities' });
+
+    if (aspectRatio) {
+      await this.applyAspectRatio(aspectRatio, model, promptId);
+    }
+
+    if (style && model?.supportsStyleControl) {
+      await this.applyStyle(style, promptId);
+    }
+  }
+
+  async generateVariant({ promptId, model, aspectRatio, style, variant }) {
+    this.emitProgress({
+      phase: 'trigger-generation',
+      currentVariant: variant
+    });
+
+    const previousResultCount = await this.countResultCandidates();
+    const generationStarted = await this.triggerGeneration(promptId);
+    if (!generationStarted) {
+      throw new Error(`Generation did not start for "${promptId}" variant ${variant}`);
+    }
+
+    await this.awaitResult(previousResultCount);
+    const capture = await this.captureResult({ promptId, variant });
+    this.emitProgress({
+      generatedVariants: this.progress.generatedVariants + 1,
+      capturesSucceeded: this.progress.capturesSucceeded + 1
+    });
+
+    this.runArtifacts.recordVariantResult(promptId, variant, {
+      modelId: model?.id || null,
+      aspectRatio,
+      style,
+      ...capture
+    });
+  }
+
+  async findPromptField() {
+    const directMatch = await findFirstVisibleLocator(this.page, PROMPT_INPUT_SELECTORS, { timeoutMs: 1200 });
+    if (directMatch) {
+      const inputMode = directMatch.strategy.name === 'prompt-host-generic' ? 'keyboard' : 'fill';
+      return {
+        ...directMatch,
+        inputMode
+      };
+    }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 15000) {
+      const handle = await this.page.evaluateHandle(() => {
+        const host = document.querySelector('firefly-prompt, [data-testid="prompt-bar-input"]');
+        const fromTextfield = host?.shadowRoot
+          ?.querySelector('firefly-textfield')
+          ?.shadowRoot
+          ?.querySelector('textarea');
+
+        if (fromTextfield) return fromTextfield;
+
+        const nestedTextarea = host?.shadowRoot?.querySelector('textarea');
+        if (nestedTextarea) return nestedTextarea;
+
+        const richText = host?.shadowRoot?.querySelector('[contenteditable="true"], [role="textbox"]');
+        if (richText) return richText;
+
+        const globalTextarea = document.querySelector('textarea[placeholder*="Describe" i], textarea[aria-label*="prompt" i], textarea');
+        if (globalTextarea) return globalTextarea;
+
+        return document.querySelector('[role="textbox"][contenteditable="true"]');
+      });
+
+      const element = handle.asElement();
+      if (element) {
+        const locator = element;
+        return {
+          strategy: { name: 'prompt-shadow-dom', selector: 'shadow-dom' },
+          locator,
+          inputMode: 'fill'
+        };
+      }
+
+      await handle.dispose();
+
+      const promptShell = await this.page.locator('firefly-prompt, [data-testid="prompt-bar-input"]').first();
+      try {
+        if (await promptShell.isVisible({ timeout: 200 })) {
+          return {
+            strategy: { name: 'prompt-shell-keyboard', selector: 'firefly-prompt, [data-testid="prompt-bar-input"]' },
+            locator: promptShell,
+            inputMode: 'keyboard'
+          };
+        }
+      } catch {
+        // Ignore and continue retries.
+      }
+
+      await this.page.waitForTimeout(250);
+    }
+
+    return null;
+  }
+
+  async detectPageState() {
+    const pageState = await detectFireflyGeneratePageState(this.page);
+    this.runArtifacts.recordEvent('page-state', pageState);
+    this.emitProgress({
+      fireflyPageState: pageState.matchedState,
+      fireflyPageReason: pageState.reason
+    });
+    return pageState;
+  }
+
+  async findPicker(strategies, hints) {
+    const direct = await findFirstVisibleLocator(this.page, strategies, { timeoutMs: 1200 });
+    if (direct && direct.strategy.name !== 'generic-picker-fallback') {
+      return direct;
+    }
+
+    const semantic = await findPickerByHints(this.page, hints, { timeoutMs: 1200 });
+    if (semantic) {
+      return semantic;
+    }
+
+    return direct;
+  }
+
+  async applyAspectRatio(aspectRatio, model, promptId) {
+    const picker = await this.findPicker(ASPECT_RATIO_PICKER_SELECTORS, ['aspect', 'square', 'portrait', 'landscape', 'widescreen']);
+    if (!picker) {
+      throw new Error(`Aspect ratio picker not found for "${promptId}"`);
+    }
+
+    const optionTexts = ASPECT_RATIO_OPTION_TEXT[aspectRatio] || [aspectRatio];
+    this.runArtifacts.recordSelector('aspect-ratio-picker', picker.strategy.name, {
+      promptId,
+      aspectRatio,
+      modelId: model?.id || null
+    });
+    await picker.locator.click({ force: true });
+
+    const option = await findOptionByTexts(this.page, optionTexts, { timeoutMs: 3000 });
+    if (!option) {
+      throw new Error(`Aspect ratio option "${aspectRatio}" not found`);
+    }
+
+    this.runArtifacts.recordSelector('aspect-ratio-option', option.name, { promptId, aspectRatio });
+    await option.locator.click({ force: true });
+  }
+
+  async applyStyle(style, promptId) {
+    const picker = await this.findPicker(STYLE_PICKER_SELECTORS, ['style', 'content']);
+    if (!picker) {
+      throw new Error(`Style picker not found for "${promptId}"`);
+    }
+
+    const optionTexts = STYLE_OPTION_TEXT[style] || [style];
+    this.runArtifacts.recordSelector('style-picker', picker.strategy.name, { promptId, style });
+    await picker.locator.click({ force: true });
+
+    const option = await findOptionByTexts(this.page, optionTexts, { timeoutMs: 3000 });
+    if (!option) {
+      throw new Error(`Style option "${style}" not found`);
+    }
+
+    this.runArtifacts.recordSelector('style-option', option.name, { promptId, style });
+    await option.locator.click({ force: true });
+  }
+
+  async confirmPartnerConsentIfPresent(promptId, model) {
+    if (!model || model.family !== 'partner') {
+      return;
+    }
+
+    const consent = await findPartnerConsentButton(this.page, { timeoutMs: 800 });
+    if (consent) {
+      await consent.locator.click({ force: true });
+      this.runArtifacts.recordFallback('partner-consent', {
+        promptId,
+        modelId: model.id,
+        action: consent.action
+      });
+      await this.page.waitForTimeout(300);
+    }
+  }
+
+  async waitForGenerateEnabled() {
+    const button = await findFirstVisibleLocator(this.page, GENERATE_BUTTON_SELECTORS, { timeoutMs: 1500 });
+    if (!button) {
+      throw new Error('Generate button not found');
+    }
+
+    this.runArtifacts.recordSelector('generate-button', button.strategy.name);
+    await this.page.waitForTimeout(100);
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 10000) {
+      try {
+        const isReady = await button.locator.evaluate((buttonElement) =>
+          !buttonElement.hasAttribute('disabled') &&
+          buttonElement.getAttribute('aria-disabled') !== 'true' &&
+          buttonElement.getAttribute('aria-busy') !== 'true'
+        );
+
+        if (isReady) {
+          return button;
+        }
+      } catch {
+        // Retry until timeout.
+      }
+
+      await this.page.waitForTimeout(250);
+    }
+
+    throw new Error('Generate button stayed disabled');
+  }
+
   async triggerGeneration(promptId) {
+    const generateButton = await this.waitForGenerateEnabled();
+    const promptField = await this.findPromptField();
     const strategies = [
       {
-        name: 'Cmd+Enter',
+        name: 'meta-enter',
         run: async () => {
-          const textarea = this.page.locator('textarea').first();
-          await textarea.click();
-          await this.page.waitForTimeout(200);
+          if (!promptField) return;
+          await promptField.locator.click({ force: true });
           await this.page.keyboard.press('Meta+Enter');
         }
       },
       {
-        name: 'Ctrl+Enter',
+        name: 'control-enter',
         run: async () => {
-          const textarea = this.page.locator('textarea').first();
-          await textarea.click();
-          await this.page.waitForTimeout(200);
+          if (!promptField) return;
+          await promptField.locator.click({ force: true });
           await this.page.keyboard.press('Control+Enter');
         }
       },
       {
-        name: 'Playwright click',
+        name: generateButton.strategy.name,
         run: async () => {
-          const btn = this.page.getByTestId('generate-button');
-          await btn.scrollIntoViewIfNeeded();
-          await this.page.waitForTimeout(200);
-          await btn.click({ force: true });
-        }
-      },
-      {
-        name: 'JS element.click',
-        run: async () => {
-          await this.page.evaluate(() => {
-            const btn = document.querySelector('[data-testid="generate-button"]');
-            if (btn) {
-              btn.click();
-            } else {
-              throw new Error('Generate button not found for JS click');
-            }
-          });
-        }
-      },
-      {
-        name: 'Pointer events',
-        run: async () => {
-          await this.page.evaluate(() => {
-            const btn = document.querySelector('[data-testid="generate-button"]');
-            if (!btn) {
-              throw new Error('Generate button not found for pointer events');
-            }
-            const events = ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'];
-            for (const type of events) {
-              btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-            }
-          });
+          await generateButton.locator.click({ force: true });
         }
       }
     ];
 
     for (const strategy of strategies) {
       try {
-        console.log(`[DEBUG] Trying generation strategy: ${strategy.name}`);
         await strategy.run();
-      } catch (err) {
-        console.log(`[WARN] Strategy "${strategy.name}" failed: ${err.message}`);
-        continue;
+        if (await this.waitForGenerationStart()) {
+          this.runArtifacts.recordSelector('generation-trigger', strategy.name, { promptId });
+          return true;
+        }
+      } catch (error) {
+        this.runArtifacts.recordFallback('trigger-strategy-failed', {
+          promptId,
+          strategy: strategy.name,
+          message: error.message
+        });
       }
-
-      const started = await this.waitForGenerationStart();
-      if (started) {
-        console.log(`[INFO] Generation triggered using strategy: ${strategy.name}`);
-        await this.page.waitForTimeout(500); // allow UI to switch into generating state
-        return true;
-      }
-
-      console.log(`[DEBUG] No UI change detected after strategy: ${strategy.name}`);
     }
 
-    console.log(`[WARN] Unable to confirm generation start for prompt ${promptId}`);
     return false;
   }
 
-  async waitForGenerationStart(timeout = 7000) {
+  async waitForGenerationStart() {
     try {
       await this.page.waitForFunction(
         () => {
-          const btn = document.querySelector('[data-testid="generate-button"]');
-          const btnDisabled = !!(btn && (
-            btn.hasAttribute('disabled') ||
-            btn.getAttribute('aria-disabled') === 'true' ||
-            btn.getAttribute('aria-busy') === 'true'
+          const button = document.querySelector('[data-testid="generate-button"]');
+          const isBusy = Boolean(button && (
+            button.hasAttribute('disabled') ||
+            button.getAttribute('aria-disabled') === 'true' ||
+            button.getAttribute('aria-busy') === 'true'
           ));
-
-          const textChanged = !document.body.innerText.includes('Start generating images');
-          const loadingIndicator = document.querySelector('[data-testid*="progress"], [data-testid*="loader"], [data-testid*="spinner"], [class*="loader"], [class*="Spinner"], [class*="Progress"], [data-testid="image-loader"]');
-
+          const loader = document.querySelector('[data-testid*="progress"], [data-testid*="loader"], [class*="loader"], [class*="Spinner"]');
           const generatingCopy = Array.from(document.querySelectorAll('button, span, div'))
-            .some(el => /generating|working|creating/i.test(el?.textContent?.trim() || ''));
-
-          return btnDisabled || loadingIndicator || generatingCopy || textChanged;
+            .some((element) => /generating|working|creating/i.test(element?.textContent?.trim() || ''));
+          return isBusy || Boolean(loader) || generatingCopy;
         },
-        { timeout }
+        { timeout: 8000 }
       );
       return true;
     } catch {
@@ -302,344 +629,139 @@ export class ImageGenerator extends BaseGenerator {
     }
   }
 
-  async captureImage(id, variant) {
-    console.log('[INFO] Looking for generated images in DOM...');
-
-    try {
-      // Wait for results container to appear - increased timeout
-      await this.page.waitForSelector('[data-testid="results-container"], [class*="result"], [class*="ResultsGrid"], img[src*="firefly"]', { timeout: 30000 });
-
-      // Find all large images in the results area
-      const images = await this.page.evaluate(() => {
-        const candidates = [];
-
-        // Look for images in various potential containers
-        const selectors = [
-          'img[src^="blob:"]',
-          'img[src*="firefly"]',
-          '[data-testid*="result"] img',
-          '[class*="result"] img',
-          '[class*="ResultsGrid"] img'
-        ];
-
-        for (const selector of selectors) {
-          const imgs = document.querySelectorAll(selector);
-          imgs.forEach(img => {
-            if (img.naturalWidth > 200 && img.naturalHeight > 200) {
-              candidates.push({
-                src: img.src,
-                width: img.naturalWidth,
-                height: img.naturalHeight
-              });
-            }
-          });
-        }
-
-        return candidates;
-      });
-
-      console.log(`[DEBUG] Found ${images.length} potential result images in DOM`);
-      images.forEach(img => {
-        console.log(`[DEBUG] Image: ${img.width}x${img.height} - ${img.src.substring(0, 80)}`);
-      });
-
-      if (images.length === 0) {
-        console.warn(`[WARN] No images found in DOM for ${id} variant ${variant}`);
-        return;
-      }
-
-      // Take the first large image (most recent generation)
-      const targetImg = images[0];
-
-      // If it's a blob URL, screenshot it
-      if (targetImg.src.startsWith('blob:') || targetImg.src.startsWith('data:')) {
-        console.log('[INFO] Capturing blob/data URL image via screenshot...');
-
-        const imgElement = await this.page.locator(`img[src="${targetImg.src}"]`).first();
-        const imgBuffer = await imgElement.screenshot({ type: 'png' });
-
-        const outPath = path.join(this.config.outputDir, `${this.safeName(id)}_${variant}.png`);
-        await fs.writeFile(outPath, imgBuffer);
-        console.log(`[INFO] 💾 Saved ${path.basename(outPath)} (${Math.round(imgBuffer.length/1024)} KB)`);
-      } else {
-        // Regular HTTP URL - fetch it
-        console.log(`[INFO] Fetching image from: ${targetImg.src}`);
-        const response = await this.page.goto(targetImg.src, { waitUntil: 'networkidle' });
-        const imgBuffer = await response.body();
-
-        const ct = response.headers()['content-type'] || 'image/png';
-        const ext = ct.includes('png') ? 'png' : (ct.includes('webp') ? 'webp' : 'jpg');
-        const outPath = path.join(this.config.outputDir, `${this.safeName(id)}_${variant}.${ext}`);
-        await fs.writeFile(outPath, imgBuffer);
-        console.log(`[INFO] 💾 Saved ${path.basename(outPath)} (${Math.round(imgBuffer.length/1024)} KB)`);
-
-        // Go back to the generation page
-        await this.page.goBack();
-      }
-
-    } catch (err) {
-      console.error(`[ERROR] Failed to capture image from DOM: ${err.message}`);
-      console.warn(`[WARN] No image captured for ${id} variant ${variant}`);
-    }
-  }
-
-  async enableAllModels() {
-    console.log('[INFO] Enabling access to all models by clicking Firefly 5 banner...');
-
-    try {
-      // SINGLE CLICK on firefly-link-info-card unlocks ALL partner models
-      // Based on screenshot evidence from user's recording
-
-      const firefly5Banner = this.page.locator('firefly-link-info-card').first();
-      const isBannerVisible = await firefly5Banner.isVisible({ timeout: 3000 }).catch(() => false);
-
-      if (isBannerVisible) {
-        console.log('[INFO] Clicking Firefly 5 banner to unlock all partner models...');
-        await firefly5Banner.click();
-        await this.page.waitForTimeout(2000); // Wait for models to load
-        console.log('[INFO] ✓ All partner models unlocked');
-
-        // Take screenshot to verify
-        await this.page.screenshot({ path: './data/debug-firefly5-enabled.png', fullPage: false });
-        console.log('[DEBUG] Screenshot saved: ./data/debug-firefly5-enabled.png');
-        return true;
-      } else {
-        console.log('[INFO] Firefly 5 banner not visible - partner models may already be enabled');
-        return false;
-      }
-    } catch (err) {
-      console.log(`[WARN] Could not click Firefly 5 banner: ${err.message}`);
-      // Don't fail - models might already be enabled
-      return false;
-    }
-  }
-
-  async setAspectRatio(aspectRatio, promptId) {
-    console.log(`[DEBUG] Attempting to set aspect ratio to: ${aspectRatio}`);
-
-    // Map common aspect ratio formats to UI text
-    const aspectRatioMap = {
-      '1:1': 'Square (1:1)',
-      'square': 'Square (1:1)',
-      '4:3': 'Landscape (4:3)',
-      'landscape': 'Landscape (4:3)',
-      '3:4': 'Portrait (3:4)',
-      'portrait': 'Portrait (3:4)',
-      '16:9': 'Widescreen (16:9)',
-      'widescreen': 'Widescreen (16:9)',
-    };
-
-    const targetRatio = aspectRatioMap[aspectRatio.toLowerCase()] || aspectRatio;
-    console.log(`[DEBUG] Mapped aspect ratio: "${aspectRatio}" -> "${targetRatio}"`);
-
-    try {
-      // Wait for aspect ratio controls to appear (they show after model selection)
-      await this.page.waitForTimeout(500);
-
-      // Get all sp-pickers - aspect ratio is typically the second one
-      const allPickers = await this.page.locator('sp-picker').all();
-
-      let aspectRatioPicker = null;
-
-      // Try to find the aspect ratio picker by checking text content
-      for (const picker of allPickers) {
-        const text = await picker.textContent().catch(() => '');
-        if (text.includes('Landscape') || text.includes('Square') || text.includes('Portrait') || text.includes('Widescreen')) {
-          aspectRatioPicker = picker;
-          break;
-        }
-      }
-
-      if (!aspectRatioPicker) {
-        console.log(`[INFO] Aspect ratio controls not available for this model`);
-        return false;
-      }
-
-      console.log(`[DEBUG] Found aspect ratio sp-picker`);
-
-      // Close any open menus by pressing Escape
-      await this.page.keyboard.press('Escape');
-      await this.page.waitForTimeout(300);
-
-      // Click to open the aspect ratio dropdown
-      await aspectRatioPicker.click({ force: true });
-      console.log(`[DEBUG] Clicked aspect ratio dropdown`);
-
-      // Wait for dropdown animation and verify it opened
-      await this.page.waitForTimeout(1000);
-
-      // Take screenshot of open aspect ratio dropdown
-      await this.page.screenshot({ path: './data/debug-aspect-ratio-dropdown.png', fullPage: true });
-      console.log('[DEBUG] Screenshot: ./data/debug-aspect-ratio-dropdown.png');
-
-      // Select the target aspect ratio using sp-menu-item:has-text
-      try {
-        const option = this.page.locator(`sp-menu-item:has-text("${targetRatio}")`).first();
-        await option.waitFor({ timeout: 3000, state: 'visible' });
-        console.log(`[DEBUG] Found aspect ratio option: ${targetRatio}`);
-        await option.click({ timeout: 2000 });
-        console.log(`[INFO] ✓ Set aspect ratio to ${targetRatio}`);
-        await this.page.waitForTimeout(500);
-        return true;
-      } catch (err) {
-        console.log(`[WARN] Could not select aspect ratio ${targetRatio}: ${err.message}`);
-        return false;
-      }
-
-    } catch (err) {
-      console.log(`[INFO] Aspect ratio not available for this model: ${err.message}`);
-      return false;
-    }
-  }
-
-  async selectModel(modelName) {
-    console.log(`[INFO] Selecting model: ${modelName}`);
-
-    try {
-      // Model name mappings for common variations
-      const modelNameMap = {
-        'Flux 1.1 Pro': 'FLUX1.1 [pro]',
-        'flux 1.1 pro': 'FLUX1.1 [pro]',
-        'Flux 1.1 Pro Ultra': 'FLUX1.1 [pro] Ultra',
-        'Firefly Image 5': 'Firefly Image 5 (preview)',
-        'Firefly 5': 'Firefly Image 5 (preview)',
-        'GPT Image': 'GPT Image',
-        'Imagen 4': 'Imagen 4',
-        'Imagen 3': 'Imagen 3',
-        'Ideogram 3.0': 'Ideogram 3.0',
-        'Firefly Image 3': 'Firefly Image 3',
-        'Firefly Image 2': 'Firefly Image 2',
-        'Gemini 2.5 (Nano Banana)': 'Nano Banana',
-        'Nano Banana': 'Nano Banana',
-      };
-
-      const targetModelName = modelNameMap[modelName] || modelName;
-      console.log(`[DEBUG] Mapped model name: "${modelName}" -> "${targetModelName}"`);
-
-      // Look for the model sp-picker (first one is the model selector)
-      const modelPicker = this.page.locator('sp-picker').first();
-
-      if (!await modelPicker.isVisible({ timeout: 3000 })) {
-        console.log('[WARN] Could not find model selector sp-picker');
-        return;
-      }
-
-      // Click to open the model menu
-      await modelPicker.click();
-      console.log('[DEBUG] Clicked model selector sp-picker');
-
-      // CRITICAL: Wait for the menu to actually open
-      // Verify the menu opened by checking aria-expanded attribute
-      try {
-        await this.page.waitForFunction(
-          () => {
-            const picker = document.querySelector('sp-picker');
-            return picker && picker.getAttribute('aria-expanded') === 'true';
-          },
-          { timeout: 3000 }
+  async awaitResult(previousResultCount) {
+    this.emitProgress({ phase: 'await-result' });
+    await this.page.waitForFunction(
+      (previousCount) => {
+        const candidates = document.querySelectorAll(
+          'img[src^="blob:"], img[src*="firefly"], img[src*="adobe"], [data-testid*="result"] img, [class*="result"] img, canvas'
         );
-        console.log('[DEBUG] Model menu is now open (aria-expanded=true)');
-      } catch {
-        console.log('[WARN] Could not verify menu opened, proceeding anyway...');
+        const button = document.querySelector('[data-testid="generate-button"]');
+        const buttonReady = button &&
+          !button.hasAttribute('disabled') &&
+          button.getAttribute('aria-disabled') !== 'true' &&
+          button.getAttribute('aria-busy') !== 'true';
+
+        return candidates.length > previousCount && buttonReady;
+      },
+      previousResultCount,
+      { timeout: this.config.waitForResultTimeoutMs }
+    );
+  }
+
+  async countResultCandidates() {
+    const counts = await Promise.all(
+      RESULT_IMAGE_SELECTORS.map(async (entry) => {
+        try {
+          return await this.page.locator(entry.selector).count();
+        } catch {
+          return 0;
+        }
+      })
+    );
+
+    return Math.max(0, ...counts);
+  }
+
+  async captureResult({ promptId, variant }) {
+    this.emitProgress({ phase: 'capture-result' });
+
+    try {
+      if (this.config.captureMode === 'screenshot') {
+        return await this.captureViaScreenshot(promptId, variant);
       }
 
-      // Wait for dropdown animation to complete
-      await this.page.waitForTimeout(1500);
-
-      // Take screenshot of open dropdown
-      await this.page.screenshot({ path: './data/debug-model-dropdown-open.png', fullPage: true });
-      console.log('[DEBUG] Screenshot saved: ./data/debug-model-dropdown-open.png');
-
-      // Look for the model option using sp-menu-item:has-text selector (most reliable)
-      try {
-        const option = this.page.locator(`sp-menu-item:has-text("${targetModelName}")`).first();
-        await option.waitFor({ timeout: 5000, state: 'visible' });
-        console.log(`[DEBUG] Found model option: ${targetModelName}`);
-        await option.click({ timeout: 3000 });
-        console.log(`[INFO] ✓ Clicked model: ${targetModelName}`);
-
-        // Wait for UI to process model selection and update controls
-        await this.page.waitForTimeout(2000);
-
-        console.log(`[INFO] ✓ Model selected: ${targetModelName}`);
-      } catch (err) {
-        console.log(`[WARN] Could not find model option "${targetModelName}" in dropdown: ${err.message}`);
-        // Take a screenshot for debugging
-        await this.page.screenshot({ path: `./data/debug-model-not-found-${this.safeName(targetModelName)}.png`, fullPage: true });
-        console.log(`[DEBUG] Screenshot saved: ./data/debug-model-not-found-${this.safeName(targetModelName)}.png`);
+      return await this.captureViaDownload(promptId, variant);
+    } catch (primaryError) {
+      if (this.config.captureMode === 'download') {
+        this.emitProgress({ fallbackCount: this.progress.fallbackCount + 1 });
+        this.runArtifacts.recordFallback('capture-screenshot', {
+          promptId,
+          variant,
+          reason: primaryError.message
+        });
+        const fallbackResult = await this.captureViaScreenshot(promptId, variant);
+        return {
+          ...fallbackResult,
+          fallbackUsed: true,
+          primaryCaptureError: primaryError.message
+        };
       }
 
-    } catch (err) {
-      console.log(`[WARN] Failed to select model "${modelName}": ${err.message}`);
+      throw primaryError;
     }
   }
 
-  async captureViaDownload(id, variant) {
-    console.log('[INFO] Capturing image via download button...');
-
-    try {
-      // Wait for images to appear - look for blob URLs
-      await this.page.waitForSelector('img[src^="blob:"], img[src*="firefly"]', { timeout: 30000 });
-      await this.page.waitForTimeout(2000); // Wait for UI to stabilize
-      console.log('[DEBUG] Generated images are visible');
-
-      // Hover over the first generated image to reveal download button
-      const firstImage = this.page.locator('img[src^="blob:"]').first();
-      await firstImage.hover();
-      console.log('[DEBUG] Hovering over first generated image');
-      await this.page.waitForTimeout(1000);
-
-      // Look for the download button - try multiple selectors
-      const downloadSelectors = [
-        'sp-action-button[label="Download"]',
-        'button[aria-label="Download"]',
-        'button[aria-label*="Download"]',
-        'sp-action-button:has-text("Download")',
-        '[data-testid*="download"]'
-      ];
-
-      let downloadBtn = null;
-      for (const selector of downloadSelectors) {
-        try {
-          const btn = this.page.locator(selector).first();
-          if (await btn.isVisible({ timeout: 2000 })) {
-            downloadBtn = btn;
-            console.log(`[DEBUG] Found download button with selector: ${selector}`);
-            break;
-          }
-        } catch {}
-      }
-
-      if (!downloadBtn) {
-        throw new Error('Download button not found after trying all selectors');
-      }
-
-      // Set up download listener before clicking
-      const downloadPromise = this.page.waitForEvent('download', { timeout: 30000 });
-
-      // Click the download button
-      await downloadBtn.click();
-      console.log('[DEBUG] Clicked download button');
-
-      // Wait for download to complete
-      const download = await downloadPromise;
-      const downloadPath = await download.path();
-
-      if (downloadPath) {
-        // Move the downloaded file to our output directory
-        const fileName = download.suggestedFilename() || `${this.safeName(id)}_${variant}.jpg`;
-        const outPath = path.join(this.config.outputDir, `${this.safeName(id)}_${variant}.jpg`);
-
-        await fs.copyFile(downloadPath, outPath);
-        const stats = await fs.stat(outPath);
-        console.log(`[INFO] 💾 Saved ${path.basename(outPath)} (${Math.round(stats.size/1024)} KB)`);
-      } else {
-        console.warn(`[WARN] Download path not available for ${id} variant ${variant}`);
-      }
-
-    } catch (err) {
-      console.error(`[ERROR] Failed to download image: ${err.message}`);
-      console.warn(`[WARN] No image captured for ${id} variant ${variant}`);
+  async captureViaDownload(promptId, variant) {
+    const image = await this.findFirstResultLocator();
+    if (!image) {
+      throw new Error('Generated image not found for download capture');
     }
+
+    await image.locator.scrollIntoViewIfNeeded();
+    await image.locator.hover({ force: true });
+    await this.page.waitForTimeout(500);
+
+    const downloadButton = await findFirstVisibleLocator(this.page, DOWNLOAD_BUTTON_SELECTORS, { timeoutMs: 2000 });
+    if (!downloadButton) {
+      throw new Error('Download button not found');
+    }
+
+    this.runArtifacts.recordSelector('download-button', downloadButton.strategy.name, { promptId, variant });
+    const downloadPromise = this.page.waitForEvent('download', { timeout: 30000 });
+    await downloadButton.locator.click({ force: true });
+    const download = await downloadPromise;
+    const downloadPath = await download.path();
+
+    if (!downloadPath) {
+      throw new Error('Download path not available');
+    }
+
+    const suggestedFilename = download.suggestedFilename() || `${this.safeName(promptId)}_${variant}.png`;
+    const extension = suggestedFilename.split('.').pop() || 'png';
+    const outputPath = buildOutPath(this.config.outputDir, promptId, variant, extension);
+    await fs.copyFile(downloadPath, outputPath);
+
+    return {
+      captureMode: 'download',
+      filePath: outputPath
+    };
+  }
+
+  async captureViaScreenshot(promptId, variant) {
+    const image = await this.findFirstResultLocator();
+    if (!image) {
+      throw new Error('Generated image not found for screenshot capture');
+    }
+
+    this.runArtifacts.recordSelector('result-target', image.strategy.name, { promptId, variant });
+    const buffer = await image.locator.screenshot({ type: 'png' });
+    const outputPath = buildOutPath(this.config.outputDir, promptId, variant, 'png');
+    await fs.writeFile(outputPath, buffer);
+
+    return {
+      captureMode: 'screenshot',
+      filePath: outputPath
+    };
+  }
+
+  async findFirstResultLocator() {
+    return findFirstVisibleLocator(this.page, RESULT_IMAGE_SELECTORS, { timeoutMs: 2000 });
+  }
+
+  async collectDiagnostics(name, error, options = {}) {
+    const screenshot = await this.runArtifacts.maybeSaveScreenshot(this.page, name, options);
+    const pageState = await detectFireflyGeneratePageState(this.page).catch(() => null);
+    const pageStateArtifact = pageState
+      ? await this.runArtifacts.maybeSaveJson(`${name}-page-state`, pageState, options)
+      : null;
+    this.runArtifacts.recordEvent('diagnostic', {
+      name,
+      screenshot,
+      pageState,
+      pageStateArtifact,
+      error: error?.message || null,
+      bodyPreview: pageState?.bodyPreview || ''
+    });
   }
 }
