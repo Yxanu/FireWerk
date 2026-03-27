@@ -12,7 +12,7 @@ import { loadHistory } from './history.js';
 import { loadOutputs, sortOutputs, toggleView, handleCheckboxClick, toggleImageSelection, removeBackgroundBatch } from './outputs.js';
 
 // Import generation control functions
-import { loadPromptFiles, updateFormFields, loadPromptPreview, startGeneration, stopGeneration } from './generation.js';
+import { loadPromptFiles, loadModelCatalog, updateFormFields, loadPromptPreview, startGeneration, stopGeneration, showCustomPromptModal, hideCustomPromptModal, useCustomPrompts, handleModelChange } from './generation.js';
 
 // Import UI utility functions
 import { setVariants, setAspectRatio, setStyle, switchTab, showStatus, showEmbers, hideEmbers, initKeyboardShortcuts, toggleShortcutsPanel } from './ui-utils.js';
@@ -35,6 +35,10 @@ window.handleCheckboxClick = handleCheckboxClick;
 window.loadHistory = loadHistory;
 window.loadPromptFiles = loadPromptFiles;
 window.toggleShortcutsPanel = toggleShortcutsPanel;
+window.showCustomPromptModal = showCustomPromptModal;
+window.hideCustomPromptModal = hideCustomPromptModal;
+window.useCustomPrompts = useCustomPrompts;
+window.handleModelChange = handleModelChange;
 
 // Initialize threshold slider
 document.addEventListener('DOMContentLoaded', () => {
@@ -50,6 +54,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize keyboard shortcuts
   initKeyboardShortcuts();
 
+  loadModelCatalog();
+  loadPromptFiles();
+
   // Load history on page load
   loadHistory();
 
@@ -59,6 +66,3 @@ document.addEventListener('DOMContentLoaded', () => {
     loadOutputs();
   });
 });
-
-// Initialize on page load
-loadPromptFiles();

@@ -17,6 +17,83 @@ let promptSets = [];
  * @type {string|null}
  */
 let currentGenerationId = null;
+let imageModelPayload = null;
+
+/**
+ * Custom prompts parsed from user input
+ * @type {Array<Object>|null}
+ */
+let customPrompts = null;
+let customPromptCsv = '';
+
+function populateModelSelect() {
+  const select = document.getElementById('model');
+  if (!select || !imageModelPayload) return;
+
+  select.innerHTML = '<option value="">Default</option>';
+
+  const groups = new Map([
+    ['adobe', document.createElement('optgroup')],
+    ['partner', document.createElement('optgroup')]
+  ]);
+  groups.get('adobe').label = 'Adobe Models';
+  groups.get('partner').label = 'Partner Models';
+
+  imageModelPayload.models.forEach((model) => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.label;
+    groups.get(model.family).appendChild(option);
+  });
+
+  select.append(groups.get('adobe'), groups.get('partner'));
+}
+
+function setSegmentedState(rowId, hiddenInputId, allowedValues, message) {
+  const row = document.getElementById(rowId);
+  const hiddenInput = document.getElementById(hiddenInputId);
+  const hint = row?.querySelector('.capability-hint');
+  if (!row || !hiddenInput) return;
+
+  const buttons = Array.from(row.querySelectorAll('.segmented-button'));
+  const allowAll = !Array.isArray(allowedValues);
+
+  buttons.forEach((button) => {
+    const value = button.getAttribute('data-value');
+    const enabled = allowAll || value === '' || allowedValues.includes(value);
+    button.disabled = !enabled;
+    button.classList.toggle('disabled', !enabled);
+
+    if (!enabled && button.classList.contains('active')) {
+      const fallbackButton = buttons.find((candidate) => candidate.getAttribute('data-value') === '') || buttons[0];
+      buttons.forEach((candidate) => candidate.classList.remove('active'));
+      fallbackButton.classList.add('active');
+      hiddenInput.value = fallbackButton.getAttribute('data-value');
+    }
+  });
+
+  if (hint) {
+    hint.textContent = message || '';
+    hint.style.display = message ? 'block' : 'none';
+  }
+}
+
+function getSelectedModel() {
+  const select = document.getElementById('model');
+  if (!select || !imageModelPayload) return null;
+  return imageModelPayload.models.find((model) => model.id === select.value) || null;
+}
+
+export async function loadModelCatalog() {
+  try {
+    const response = await fetch('/api/models');
+    imageModelPayload = await response.json();
+    populateModelSelect();
+    handleModelChange();
+  } catch (err) {
+    showStatus('error', `Failed to load model catalog: ${err.message}`);
+  }
+}
 
 /**
  * Loads available prompt files from the server
@@ -60,6 +137,10 @@ export function updateFormFields() {
     option.textContent = `${set.name} (${set.count})`;
     select.appendChild(option);
   });
+
+  if (type === 'images') {
+    handleModelChange();
+  }
 }
 
 /**
@@ -71,6 +152,11 @@ export function updateFormFields() {
 export async function loadPromptPreview() {
   const filename = document.getElementById('prompt-file').value;
   const preview = document.getElementById('prompt-preview');
+
+  if (filename) {
+    customPrompts = null;
+    customPromptCsv = '';
+  }
 
   if (!filename) {
     preview.classList.remove('show');
@@ -94,6 +180,58 @@ export async function loadPromptPreview() {
     preview.classList.add('show');
   } catch (err) {
     showStatus('error', `Failed to load preview: ${err.message}`);
+  }
+}
+
+export function handleModelChange() {
+  const model = getSelectedModel();
+  const modelHint = document.getElementById('model-capability-note');
+  const partnerHint = document.getElementById('partner-model-note');
+
+  if (!model) {
+    setSegmentedState('aspect-row', 'aspect-ratio', null, '');
+    setSegmentedState('style-row', 'style', null, '');
+    if (modelHint) modelHint.textContent = '';
+    if (partnerHint) {
+      partnerHint.textContent = '';
+      partnerHint.style.display = 'none';
+    }
+    return;
+  }
+
+  const aspectMessage = Array.isArray(model.supportedAspectRatios)
+    ? `Available for ${model.label}: ${model.supportedAspectRatios.join(', ')}`
+    : `${model.label} uses model-specific aspect ratio controls.`;
+
+  const styleMessage = model.supportsStyleControl
+    ? `Style/content type is supported for ${model.label}.`
+    : `${model.label} ignores Firefly style/content type controls.`;
+
+  setSegmentedState(
+    'aspect-row',
+    'aspect-ratio',
+    model.supportedAspectRatios,
+    aspectMessage
+  );
+  setSegmentedState(
+    'style-row',
+    'style',
+    model.supportsStyleControl ? null : [''],
+    styleMessage
+  );
+
+  if (modelHint) {
+    modelHint.textContent = `${model.family === 'partner' ? 'Partner' : 'Adobe'} model${model.tier === 'core' ? ' · core test target' : ''}`;
+  }
+
+  if (partnerHint) {
+    if (model.family === 'partner') {
+      partnerHint.textContent = 'Partner models can trigger an extra consent step inside Firefly.';
+      partnerHint.style.display = 'block';
+    } else {
+      partnerHint.textContent = '';
+      partnerHint.style.display = 'none';
+    }
   }
 }
 
@@ -123,8 +261,9 @@ export async function startGeneration() {
   const style = document.getElementById('style').value;
   const model = document.getElementById('model').value;
 
-  if (!promptFile) {
-    showStatus('error', 'Please select a prompt file');
+  // Check if using custom prompts or file
+  if (!promptFile && !customPrompts) {
+    showStatus('error', 'Please select a prompt file or input custom prompts');
     return;
   }
 
@@ -132,13 +271,21 @@ export async function startGeneration() {
   btn.disabled = true;
   btn.innerHTML = '<span>Starting...</span>';
 
-  const body = { promptFile, outputDir };
+  const body = { outputDir };
+
+  // Include custom prompts or prompt file
+  if (customPrompts) {
+    body.customPromptCsv = customPromptCsv;
+  } else {
+    body.promptFile = promptFile;
+  }
+
   if (type === 'images') {
     body.variantsPerPrompt = parseInt(variants);
     body.captureMode = captureMode;
     if (aspectRatio) body.aspectRatio = aspectRatio;
     if (style) body.style = style;
-    if (model) body.model = model;
+    if (model) body.modelId = model;
     if (globalStyle) body.globalStyle = globalStyle;
   }
 
@@ -157,7 +304,7 @@ export async function startGeneration() {
       // Save to history
       saveToHistory({
         generationId: result.generationId,
-        promptFile,
+        promptFile: promptFile || '(Custom Prompts)',
         type,
         outputDir,
         imageCount: 0
@@ -268,14 +415,21 @@ export async function pollStatus(generationId) {
           imageCount: status.completed || 0
         });
       } else {
-        showStatus('info', `Generating images...`, {
-          completed: status.completed || 0,
-          total: status.prompts || 0
+        const progress = status.progress || {};
+        const completed = progress.generatedVariants ?? status.completed ?? 0;
+        const total = progress.totalVariants ?? status.prompts ?? 0;
+        const label = progress.phase
+          ? `Generating images... (${progress.phase}${progress.fallbackCount ? `, fallbacks: ${progress.fallbackCount}` : ''})`
+          : 'Generating images...';
+
+        showStatus('info', label, {
+          completed,
+          total
         });
 
         // Update running status with current progress
         updateHistoryStatus(generationId, 'running', {
-          imageCount: status.completed || 0
+          imageCount: progress.capturesSucceeded ?? status.completed ?? 0
         });
       }
     } catch (err) {
@@ -284,3 +438,101 @@ export async function pollStatus(generationId) {
   }, 2000);
 }
 
+/**
+ * Shows the custom prompt input modal
+ * @description Opens modal where users can input CSV-formatted prompts
+ * @returns {void}
+ */
+export function showCustomPromptModal() {
+  const overlay = document.getElementById('custom-prompt-overlay');
+  const panel = document.getElementById('custom-prompt-panel');
+  const input = document.getElementById('custom-prompt-input');
+
+  if (!overlay || !panel || !input) {
+    return;
+  }
+
+  overlay.style.display = 'block';
+  panel.style.display = 'block';
+
+  // Add 'show' class to trigger CSS visibility
+  setTimeout(() => {
+    overlay.classList.add('show');
+    panel.classList.add('show');
+    input.focus();
+  }, 10);
+}
+
+/**
+ * Hides the custom prompt input modal
+ * @description Closes the custom prompt modal without saving
+ * @returns {void}
+ */
+export function hideCustomPromptModal() {
+  const overlay = document.getElementById('custom-prompt-overlay');
+  const panel = document.getElementById('custom-prompt-panel');
+
+  // Remove 'show' class to trigger fade-out transition
+  overlay.classList.remove('show');
+  panel.classList.remove('show');
+
+  // Hide after transition completes
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    panel.style.display = 'none';
+  }, 250);
+}
+
+/**
+ * Parses CSV text and uses it as custom prompts
+ * @description Parses user-entered CSV text, validates it, and sets it as the active prompt set
+ * @returns {void}
+ */
+export async function useCustomPrompts() {
+  const csvText = document.getElementById('custom-prompt-input').value.trim();
+
+  if (!csvText) {
+    showStatus('error', 'Please enter some prompts');
+    return;
+  }
+
+  try {
+    await parseInlineCsv(csvText);
+  } catch (err) {
+    showStatus('error', `Failed to parse CSV: ${err.message}`);
+  }
+}
+
+async function parseInlineCsv(csvText) {
+  const response = await fetch('/api/prompts/parse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ csv: csvText })
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || 'CSV parsing failed');
+  }
+
+  customPrompts = result;
+  customPromptCsv = csvText;
+
+  const select = document.getElementById('prompt-file');
+  select.value = '';
+
+  const preview = document.getElementById('prompt-preview');
+  preview.innerHTML = `<div class="preview-title">${result.length} Custom Prompts</div>`;
+  result.slice(0, 3).forEach((prompt) => {
+    const text = prompt.prompt_text || prompt.text || JSON.stringify(prompt);
+    preview.innerHTML += `<div class="preview-item">${text.substring(0, 120)}${text.length > 120 ? '...' : ''}</div>`;
+  });
+
+  if (result.length > 3) {
+    preview.innerHTML += `<div style="text-align: center; margin-top: 1rem; color: var(--text-dim); font-size: 0.75rem;">+${result.length - 3} more</div>`;
+  }
+
+  preview.classList.add('show');
+  hideCustomPromptModal();
+  showStatus('success', `Loaded ${result.length} custom prompts`);
+}

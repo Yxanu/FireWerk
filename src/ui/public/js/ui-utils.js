@@ -287,6 +287,19 @@ export function initKeyboardShortcuts() {
       if (panel && panel.classList.contains('show')) {
         event.preventDefault();
         toggleShortcutsPanel();
+        return;
+      }
+
+      const customPromptPanel = document.getElementById('custom-prompt-panel');
+      if (customPromptPanel && customPromptPanel.classList.contains('show')) {
+        event.preventDefault();
+        const overlay = document.getElementById('custom-prompt-overlay');
+        customPromptPanel.classList.remove('show');
+        overlay?.classList.remove('show');
+        setTimeout(() => {
+          customPromptPanel.style.display = 'none';
+          if (overlay) overlay.style.display = 'none';
+        }, 250);
       }
     }
   });
@@ -344,4 +357,3 @@ export function toggleShortcutsPanel() {
     }, 10);
   }
 }
-

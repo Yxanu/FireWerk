@@ -40,38 +40,26 @@
 
         <div class="form-row full-width">
           <label>Prompts</label>
-          <select id="prompt-file" aria-label="Prompt file selector" onchange="loadPromptPreview()">
-            <option value="">Select prompts...</option>
-          </select>
+          <div style="display: flex; gap: 0.5rem;">
+            <select id="prompt-file" aria-label="Prompt file selector" onchange="loadPromptPreview()" style="flex: 1;">
+              <option value="">Select prompts...</option>
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="showCustomPromptModal()" title="Input custom prompts" aria-label="Input custom prompts">
+              <span>✏️</span>
+            </button>
+          </div>
         </div>
 
         <div class="form-row" id="model-row">
           <label>Model</label>
           <div class="tooltip-wrapper">
-            <select id="model" aria-label="Model selector" aria-describedby="model-tooltip">
+            <select id="model" aria-label="Model selector" aria-describedby="model-tooltip" onchange="handleModelChange()">
               <option value="">Default</option>
-            <optgroup label="Adobe Models">
-              <option value="Firefly Image 5 (Vorschau)">Firefly Image 5 (Preview)</option>
-              <option value="Firefly Image 4 Ultra">Firefly Image 4 Ultra</option>
-              <option value="Firefly Image 4">Firefly Image 4</option>
-              <option value="Firefly Image 3">Firefly Image 3</option>
-            </optgroup>
-            <optgroup label="Partner Models">
-              <option value="Ideogram 3.0">Ideogram 3.0</option>
-              <option value="Flux Kontext Max">Flux Kontext Max</option>
-              <option value="Flux Kontext Pro">Flux Kontext Pro</option>
-              <option value="Flux 1.1 Pro">Flux 1.1 Pro</option>
-              <option value="Flux 1.1 Ultra">Flux 1.1 Ultra</option>
-              <option value="Flux 1.1 Ultra (Raw)">Flux 1.1 Ultra (Raw)</option>
-              <option value="Gemini 2.5 (Nano Banana)">Gemini 2.5 (Nano Banana)</option>
-              <option value="Imagen 4">Imagen 4</option>
-              <option value="Imagen 3">Imagen 3</option>
-              <option value="GPT Image">GPT Image</option>
-              <option value="Runway Gen-4 Image">Runway Gen-4 Image</option>
-            </optgroup>
-          </select>
-          <div class="tooltip" id="model-tooltip" role="tooltip">Choose the AI model for image generation. Firefly models are Adobe's native models, while Partner models include Ideogram, Flux, Gemini, Imagen, and others.</div>
+            </select>
+            <div class="tooltip" id="model-tooltip" role="tooltip">Choose the AI model for image generation. Capabilities update automatically from the shared model catalog.</div>
           </div>
+          <div class="capability-hint" id="model-capability-note" aria-live="polite"></div>
+          <div class="capability-hint partner-note" id="partner-model-note" aria-live="polite" style="display: none;"></div>
         </div>
 
         <div class="form-row" id="aspect-row">
@@ -83,6 +71,7 @@
             <button type="button" class="segmented-button" data-value="16:9" onclick="setAspectRatio(this)">16:9</button>
           </div>
           <input type="hidden" id="aspect-ratio" value="">
+          <div class="capability-hint" style="display: none;"></div>
         </div>
 
         <div class="form-row" id="style-row">
@@ -94,6 +83,7 @@
             <button type="button" class="segmented-button" data-value="graphic" onclick="setStyle(this)">Graphic</button>
           </div>
           <input type="hidden" id="style" value="">
+          <div class="capability-hint" style="display: none;"></div>
         </div>
 
         <div class="form-row" id="variants-row">
@@ -219,6 +209,30 @@
       <div class="shortcut-item">
         <span class="shortcut-description">Navigate between tabs</span>
         <span class="shortcut-key"><kbd>Tab</kbd></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="shortcuts-overlay" id="custom-prompt-overlay" onclick="hideCustomPromptModal()" style="display: none;"></div>
+  <div class="shortcuts-panel" id="custom-prompt-panel" role="dialog" aria-labelledby="custom-prompt-title" aria-modal="true" style="display: none;">
+    <div class="shortcuts-header">
+      <h2 id="custom-prompt-title">Custom Prompts (CSV Format)</h2>
+      <button onclick="hideCustomPromptModal()" aria-label="Close custom prompt panel">×</button>
+    </div>
+    <div style="padding: 1.5rem;">
+      <p style="margin: 0 0 1rem 0; color: var(--text-dim); font-size: 0.875rem;">
+        Enter prompts in CSV format. First line is headers, then one prompt per line.<br>
+        Example: <code style="background: var(--bg-surface); padding: 0.125rem 0.375rem; border-radius: 0.25rem;">prompt_id,prompt_text,aspect_ratio,style</code>
+      </p>
+      <textarea
+        id="custom-prompt-input"
+        placeholder="prompt_id,prompt_text,aspect_ratio,style&#10;test1,A beautiful sunset,1:1,Art&#10;test2,Mountain landscape,16:9,Photographic"
+        style="width: 100%; min-height: 300px; padding: 0.75rem; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 0.5rem; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.875rem; resize: vertical;"
+        aria-label="Custom prompt CSV input"
+      ></textarea>
+      <div style="display: flex; gap: 0.75rem; margin-top: 1rem; justify-content: flex-end;">
+        <button class="btn btn-outline" onclick="hideCustomPromptModal()">Cancel</button>
+        <button class="btn" onclick="useCustomPrompts()">Use These Prompts</button>
       </div>
     </div>
   </div>

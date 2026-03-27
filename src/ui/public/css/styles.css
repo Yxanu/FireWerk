@@ -511,6 +511,15 @@ select option {
   z-index: 1;
 }
 
+.segmented-button.disabled,
+.segmented-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* ============================================
    INPUT ENHANCEMENTS
    ============================================ */
@@ -644,11 +653,27 @@ select option {
   transform: scale(1.02);
 }
 
+.btn-sm {
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  min-width: auto;
+}
+
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   transform: none !important;
   box-shadow: none !important;
+}
+
+.capability-hint {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--fw-color-text-secondary);
+}
+
+.partner-note {
+  color: var(--fw-color-accent-alt);
 }
 
 /* Ember pulse animation for primary buttons */

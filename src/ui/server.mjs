@@ -8,10 +8,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ImageGenerator } from '../generators/ImageGenerator.mjs';
 import { SpeechGenerator } from '../generators/SpeechGenerator.mjs';
-import { loadPrompts } from '../../lib/utils/promptLoader.mjs';
+import { loadPrompts, parsePrompts } from '../../lib/utils/promptLoader.mjs';
 import fs from 'fs/promises';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import {
+  getImageModelUiPayload,
+  normalizeAspectRatio,
+  normalizeStyle,
+  validateImageRequest
+} from '../models/imageModelCatalog.mjs';
+import { planImageBatches } from '../batch/imageBatchPlanner.mjs';
 
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +39,62 @@ app.use(express.static(path.join(__dirname, 'public')));
  * @type {Map<string, Object>} activeGenerations - Map storing active generation processes by ID
  */
 const activeGenerations = new Map();
+
+function applyGlobalImageOptions(prompts, { aspectRatio, style, modelId, model, globalStyle }) {
+  return prompts.map((prompt) => ({
+    ...prompt,
+    ...(globalStyle ? { prompt_text: `${prompt.prompt_text}, ${globalStyle}` } : {}),
+    ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
+    ...(style ? { style } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(!modelId && model ? { model } : {})
+  }));
+}
+
+function validateImagePrompts(prompts) {
+  const errors = [];
+
+  prompts.forEach((prompt, index) => {
+    const validation = validateImageRequest({
+      modelId: prompt.modelId,
+      model: prompt.model,
+      aspectRatio: prompt.aspect_ratio,
+      style: prompt.style
+    });
+
+    if (!validation.ok) {
+      errors.push(`Prompt ${index + 1}${prompt.prompt_id ? ` (${prompt.prompt_id})` : ''}: ${validation.errors.join('; ')}`);
+    } else {
+      prompt.modelId = validation.normalized.modelId || prompt.modelId || '';
+      prompt.model = validation.normalized.model?.label || prompt.model || '';
+      prompt.aspect_ratio = normalizeAspectRatio(prompt.aspect_ratio);
+      prompt.style = normalizeStyle(prompt.style);
+    }
+  });
+
+  return errors;
+}
+
+async function loadImagePromptsFromRequest(body = {}) {
+  const { promptFile, customPrompts, customPromptCsv } = body;
+
+  if (customPromptCsv && customPromptCsv.trim()) {
+    const prompts = await parsePrompts(customPromptCsv, 'inline.csv');
+    return { prompts, source: 'inline-csv' };
+  }
+
+  if (Array.isArray(customPrompts) && customPrompts.length > 0) {
+    return { prompts: customPrompts, source: 'custom-prompts' };
+  }
+
+  if (promptFile) {
+    const filePath = path.join(process.cwd(), 'examples', 'prompts', promptFile);
+    const prompts = await loadPrompts(filePath);
+    return { prompts, source: promptFile };
+  }
+
+  throw new Error('No prompts provided');
+}
 
 // API Routes
 
@@ -66,6 +129,10 @@ app.get('/api/prompts', async (req, res) => {
   }
 });
 
+app.get('/api/models', async (req, res) => {
+  res.json(getImageModelUiPayload());
+});
+
 /**
  * @route GET /api/prompts/:filename
  * @param {string} req.params.filename - Name of the prompt file to load
@@ -80,6 +147,31 @@ app.get('/api/prompts/:filename', async (req, res) => {
     res.json(prompts);
   } catch (err) {
     res.status(404).json({ error: 'Prompt file not found' });
+  }
+});
+
+app.post('/api/prompts/parse', async (req, res) => {
+  try {
+    const prompts = await parsePrompts(req.body?.csv || '', 'inline.csv');
+    res.json(prompts);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/batches/plan', async (req, res) => {
+  try {
+    const { prompts } = await loadImagePromptsFromRequest(req.body || {});
+    const planned = planImageBatches(prompts, {
+      modelId: req.body?.modelId || '',
+      model: req.body?.model || '',
+      aspectRatio: req.body?.aspectRatio || '',
+      style: req.body?.style || ''
+    });
+    res.json(planned);
+  } catch (err) {
+    const status = err.message === 'No prompts provided' ? 400 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -100,31 +192,28 @@ app.get('/api/prompts/:filename', async (req, res) => {
  * @throws {500} If generation fails to start
  */
 app.post('/api/generate/images', async (req, res) => {
-  const { promptFile, email, outputDir, variantsPerPrompt, aspectRatio, style, model, captureMode, globalStyle } = req.body;
+  const { promptFile, customPrompts, customPromptCsv, email, outputDir, variantsPerPrompt, aspectRatio, style, modelId, model, captureMode, globalStyle, debugRunDir, saveArtifacts } = req.body;
 
   console.log('[DEBUG] Received request:', { aspectRatio, style, model, captureMode });
 
   try {
-    const filePath = path.join(process.cwd(), 'examples', 'prompts', promptFile);
-    let prompts = await loadPrompts(filePath);
+    const loaded = await loadImagePromptsFromRequest({ promptFile, customPrompts, customPromptCsv });
+    let prompts = loaded.prompts;
+    console.log(`[INFO] Using ${prompts.length} prompts from ${loaded.source}`);
 
-    // Append global style to all prompts if provided
-    if (globalStyle && globalStyle.trim()) {
-      prompts = prompts.map(p => ({
-        ...p,
-        prompt_text: p.prompt_text + ', ' + globalStyle.trim()
-      }));
-    }
+    prompts = applyGlobalImageOptions(prompts, {
+      aspectRatio,
+      style,
+      modelId,
+      model,
+      globalStyle: globalStyle?.trim()
+    });
 
-    // Apply global aspect ratio and style to all prompts if provided
-    if (aspectRatio || style) {
-      console.log('[DEBUG] Mapping aspect ratio and style to prompts');
-      prompts = prompts.map(p => ({
-        ...p,
-        ...(aspectRatio && { aspect_ratio: aspectRatio }),
-        ...(style && { style: style })
-      }));
-      console.log('[DEBUG] First prompt after mapping:', prompts[0]);
+    const validationErrors = validateImagePrompts(prompts);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        error: validationErrors.join('\n')
+      });
     }
 
     const generationId = `img_${Date.now()}`;
@@ -133,14 +222,18 @@ app.post('/api/generate/images', async (req, res) => {
     const generator = new ImageGenerator({
       outputDir: outputDir || './output',
       variantsPerPrompt: variantsPerPrompt || 1,
+      modelId: modelId || '',
       model: model || null,
       aspectRatio: aspectRatio || null,
       style: style || null,
-      captureMode: captureMode || 'screenshot',
-      onProgress: (completed) => {
+      captureMode: captureMode || 'download',
+      debugRunDir: debugRunDir || '',
+      saveArtifacts: saveArtifacts || 'failures',
+      onProgress: (progress) => {
         const gen = activeGenerations.get(generationId);
         if (gen) {
-          gen.completed = completed;
+          gen.completed = progress.capturesSucceeded || 0;
+          gen.progress = progress;
         }
       }
     });
@@ -150,6 +243,15 @@ app.post('/api/generate/images', async (req, res) => {
       status: 'running',
       prompts: prompts.length,
       completed: 0,
+      progress: {
+        totalPrompts: prompts.length,
+        totalVariants: prompts.length * (variantsPerPrompt || 1),
+        processedPrompts: 0,
+        generatedVariants: 0,
+        capturesSucceeded: 0,
+        fallbackCount: 0,
+        phase: 'queued'
+      },
       generator
     });
 
@@ -160,6 +262,10 @@ app.post('/api/generate/images', async (req, res) => {
         const gen = activeGenerations.get(generationId);
         if (gen && gen.status !== 'stopped') {
           gen.status = 'completed';
+          gen.progress = {
+            ...(gen.progress || {}),
+            phase: 'completed'
+          };
         }
         await generator.close();
       } catch (err) {
@@ -167,6 +273,10 @@ app.post('/api/generate/images', async (req, res) => {
         if (gen && gen.status !== 'stopped') {
           gen.status = 'failed';
           gen.error = err.message;
+          gen.progress = {
+            ...(gen.progress || {}),
+            phase: 'failed'
+          };
         }
         await generator.close();
       }
