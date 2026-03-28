@@ -40,6 +40,26 @@ app.use(express.static(path.join(__dirname, 'public')));
  */
 const activeGenerations = new Map();
 
+function parseBooleanOption(value, fallback) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+}
+
 function applyGlobalImageOptions(prompts, { aspectRatio, style, modelId, model, globalStyle }) {
   return prompts.map((prompt) => ({
     ...prompt,
@@ -192,7 +212,7 @@ app.post('/api/batches/plan', async (req, res) => {
  * @throws {500} If generation fails to start
  */
 app.post('/api/generate/images', async (req, res) => {
-  const { promptFile, customPrompts, customPromptCsv, email, outputDir, variantsPerPrompt, aspectRatio, style, modelId, model, captureMode, globalStyle, debugRunDir, saveArtifacts } = req.body;
+  const { promptFile, customPrompts, customPromptCsv, email, outputDir, variantsPerPrompt, aspectRatio, style, modelId, model, captureMode, globalStyle, debugRunDir, saveArtifacts, headless } = req.body;
 
   console.log('[DEBUG] Received request:', { aspectRatio, style, model, captureMode });
 
@@ -222,6 +242,7 @@ app.post('/api/generate/images', async (req, res) => {
     const generator = new ImageGenerator({
       outputDir: outputDir || './output',
       variantsPerPrompt: variantsPerPrompt || 1,
+      headless: parseBooleanOption(headless, true),
       modelId: modelId || '',
       model: model || null,
       aspectRatio: aspectRatio || null,
@@ -264,6 +285,7 @@ app.post('/api/generate/images', async (req, res) => {
           gen.status = 'completed';
           gen.progress = {
             ...(gen.progress || {}),
+            status: 'completed',
             phase: 'completed'
           };
         }
@@ -275,6 +297,7 @@ app.post('/api/generate/images', async (req, res) => {
           gen.error = err.message;
           gen.progress = {
             ...(gen.progress || {}),
+            status: 'failed',
             phase: 'failed'
           };
         }
@@ -299,7 +322,7 @@ app.post('/api/generate/images', async (req, res) => {
  * @throws {500} If generation fails to start
  */
 app.post('/api/generate/speech', async (req, res) => {
-  const { promptFile, email, outputDir } = req.body;
+  const { promptFile, email, outputDir, headless } = req.body;
 
   try {
     const filePath = path.join(process.cwd(), 'examples', 'prompts', promptFile);
@@ -309,7 +332,8 @@ app.post('/api/generate/speech', async (req, res) => {
 
     // Start generation in background
     const generator = new SpeechGenerator({
-      outputDir: outputDir || './output'
+      outputDir: outputDir || './output',
+      headless: parseBooleanOption(headless, true)
     });
 
     activeGenerations.set(generationId, {
@@ -324,10 +348,20 @@ app.post('/api/generate/speech', async (req, res) => {
       try {
         await generator.generate(prompts, email);
         activeGenerations.get(generationId).status = 'completed';
+        activeGenerations.get(generationId).progress = {
+          ...(activeGenerations.get(generationId).progress || {}),
+          status: 'completed',
+          phase: 'completed'
+        };
         await generator.close();
       } catch (err) {
         activeGenerations.get(generationId).status = 'failed';
         activeGenerations.get(generationId).error = err.message;
+        activeGenerations.get(generationId).progress = {
+          ...(activeGenerations.get(generationId).progress || {}),
+          status: 'failed',
+          phase: 'failed'
+        };
         await generator.close();
       }
     })();
@@ -371,6 +405,11 @@ app.post('/api/stop/:generationId', async (req, res) => {
 
   try {
     gen.status = 'stopped';
+    gen.progress = {
+      ...(gen.progress || {}),
+      status: 'stopped',
+      phase: 'stopped'
+    };
     if (gen.generator && gen.generator.close) {
       await gen.generator.close();
     }

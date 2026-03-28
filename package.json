@@ -4,7 +4,9 @@
   "description": "FireWerk — Automated Adobe Firefly generation for images and speech via Playwright",
   "type": "module",
   "scripts": {
-    "ui": "node src/ui/server.mjs",
+    "ui": "PW_HEADLESS=true node src/ui/server.mjs",
+    "ui:debug": "PW_HEADLESS=false node src/ui/server.mjs",
+    "auth:refresh": "node src/cli.mjs refresh-session --headless false",
     "generate:images": "node src/cli.mjs images",
     "generate:speech": "node src/cli.mjs speech",
     "test": "playwright test",

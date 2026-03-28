@@ -2,6 +2,7 @@
 import path from 'path';
 import { ImageGenerator } from './generators/ImageGenerator.mjs';
 import { SpeechGenerator } from './generators/SpeechGenerator.mjs';
+import { BaseGenerator } from './generators/BaseGenerator.mjs';
 import { loadPrompts } from '../lib/utils/promptLoader.mjs';
 import { validateImageRequest } from './models/imageModelCatalog.mjs';
 import { planImageBatches } from './batch/imageBatchPlanner.mjs';
@@ -14,6 +15,7 @@ Usage:
   node src/cli.mjs speech --prompts <path> [options]
   node src/cli.mjs plan-batches --prompts <path> [options]
   node src/cli.mjs submit-batches --prompts <path> --output <dir> [options]
+  node src/cli.mjs refresh-session [options]
 
 Options:
   --prompts <path>         Path to prompts file (CSV or JSON)
@@ -25,7 +27,7 @@ Options:
   --variants <n>           Variants per prompt for images (default: 1)
   --server <url>           FireWerk API base URL (default: http://localhost:3000)
   --capture-mode <value>   download|screenshot
-  --headless <bool>        Run in headless mode (default: false)
+  --headless <bool>        Run in headless mode (default: true, refresh-session defaults to false)
   --debug-run-dir <dir>    Directory for run artifacts
   --save-artifacts <mode>  failures|all|none (default: failures)
 
@@ -34,6 +36,7 @@ Commands:
   speech                   Run the speech generator directly
   plan-batches             Split prompts into FireWerk-compatible jobs
   submit-batches           Plan jobs and submit them to a local FireWerk API
+  refresh-session          Open Firefly once to refresh/save the Adobe session
 `;
 
 function parseArgs(argv) {
@@ -73,6 +76,14 @@ function buildPlanDefaults(options) {
     aspectRatio: options['aspect-ratio'] || process.env.ASPECT_RATIO || '',
     style: options.style || process.env.STYLE || ''
   };
+}
+
+function parseOptionalBoolean(value, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return value === 'true';
 }
 
 async function loadPlan(promptsPath, options) {
@@ -132,7 +143,7 @@ async function runImagesCommand(promptsPath, outputDir, email, options) {
   const generator = new ImageGenerator({
     outputDir,
     variantsPerPrompt: parseInt(options.variants || process.env.VARIANTS_PER_PROMPT || 1, 10),
-    headless: options.headless !== undefined ? options.headless === 'true' : undefined,
+    headless: parseOptionalBoolean(options.headless, true),
     modelId: modelValidation.normalized.modelId || '',
     model: modelValidation.normalized.model?.label || process.env.MODEL || null,
     aspectRatio: options['aspect-ratio'] || process.env.ASPECT_RATIO || null,
@@ -150,7 +161,7 @@ async function runSpeechCommand(promptsPath, outputDir, email, options) {
   const prompts = await loadPrompts(path.resolve(promptsPath));
   const generator = new SpeechGenerator({
     outputDir,
-    headless: options.headless !== undefined ? options.headless === 'true' : undefined
+    headless: parseOptionalBoolean(options.headless, true)
   });
 
   await generator.generate(prompts, email);
@@ -186,6 +197,7 @@ async function runSubmitBatchesCommand(promptsPath, outputDir, email, options) {
       email,
       outputDir,
       variantsPerPrompt: parseInt(options.variants || process.env.VARIANTS_PER_PROMPT || 1, 10),
+      headless: parseOptionalBoolean(options.headless, true),
       captureMode: options['capture-mode'] || process.env.CAPTURE_MODE || 'download',
       debugRunDir: options['debug-run-dir'] || process.env.DEBUG_RUN_DIR || '',
       saveArtifacts: options['save-artifacts'] || process.env.SAVE_ARTIFACTS || 'failures'
@@ -208,6 +220,25 @@ async function runSubmitBatchesCommand(promptsPath, outputDir, email, options) {
     rejectedPrompts: plan.rejectedPrompts,
     results
   });
+}
+
+async function runRefreshSessionCommand(email, options) {
+  const generator = new BaseGenerator({
+    headless: options.headless !== undefined ? options.headless === 'true' : false
+  });
+
+  await generator.init();
+  const authenticated = await generator.ensureAuthenticatedSession(
+    email,
+    process.env.FIREFLY_AUTH_URL || 'https://firefly.adobe.com/generate/image'
+  );
+  await generator.close();
+
+  if (!authenticated) {
+    throw new Error('Could not refresh Firefly session');
+  }
+
+  console.log('✅ Firefly session refreshed');
 }
 
 async function main() {
@@ -239,6 +270,9 @@ async function main() {
       case 'submit-batches':
         requirePrompts(command, promptsPath);
         await runSubmitBatchesCommand(promptsPath, outputDir, email, options);
+        break;
+      case 'refresh-session':
+        await runRefreshSessionCommand(email, options);
         break;
       default:
         throw new Error(`Unknown command: ${command}`);

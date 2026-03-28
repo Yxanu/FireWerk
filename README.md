@@ -128,13 +128,25 @@ npm run generate:speech -- --prompts ./audio-scripts.csv --output ./voiceovers
 
 ### First Run - One-Time Adobe Firefly Authentication
 
-On first run, FireWerk will handle Adobe Firefly authentication automatically:
+Normal FireWerk runs now default to headless background workers. Refresh the Adobe session once in a visible browser before running headless jobs:
 
-1. ✅ Browser opens to Adobe Firefly login page
-2. ✅ Your email is auto-filled (from .env file)
-3. ✅ Approve login in your **Adobe Access mobile app** (2FA)
-4. ✅ Session saved locally - **never login again!**
-5. ✅ Start batch generating images immediately
+```bash
+npm run auth:refresh
+```
+
+That flow:
+
+1. ✅ Opens a visible browser only for Adobe login
+2. ✅ Auto-fills your email (from `.env`)
+3. ✅ Lets you approve in the **Adobe Access mobile app** (2FA)
+4. ✅ Saves the session locally to `./data/storageState.json`
+5. ✅ Lets later `npm run ui` or CLI jobs run headless in the background
+
+For visible troubleshooting, use:
+
+```bash
+npm run ui:debug
+```
 
 **No API keys needed** - Works with your existing Adobe Firefly subscription!
 

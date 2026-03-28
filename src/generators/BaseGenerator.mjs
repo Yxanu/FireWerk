@@ -20,8 +20,9 @@ const SIGN_IN_SELECTORS = [
 
 export class BaseGenerator {
   constructor(config = {}) {
+    const defaultHeadless = (process.env.PW_HEADLESS ?? process.env.HEADLESS ?? 'true') === 'true';
     this.config = {
-      headless: (process.env.PW_HEADLESS ?? process.env.HEADLESS ?? 'false') === 'true',
+      headless: config.headless ?? defaultHeadless,
       storageState: process.env.STORAGE_STATE || './data/storageState.json',
       outputDir: process.env.OUTPUT_DIR || './output',
       viewport: {
@@ -78,10 +79,48 @@ export class BaseGenerator {
     return false;
   }
 
-  hasAuthenticationFrame() {
-    return this.page.frames().some((frame) =>
+  getAuthenticationFrames() {
+    return this.page.frames().filter((frame) =>
       AUTH_FRAME_HOSTS.some((host) => frame.url().includes(host))
     );
+  }
+
+  async getAuthenticationState() {
+    const authFrames = this.getAuthenticationFrames();
+    const frameStates = await Promise.all(authFrames.map(async (frame) => {
+      let visible = false;
+      let interactive = false;
+
+      try {
+        const frameElement = await frame.frameElement();
+        visible = await frameElement.isVisible({ timeout: 500 }).catch(() => false);
+      } catch {
+        visible = false;
+      }
+
+      if (visible) {
+        try {
+          interactive = await frame.locator(
+            'input[type="email"], input[name="username"], button:has-text("Continue"), button:has-text("Sign in"), a:has-text("Continue with email")'
+          ).first().isVisible({ timeout: 500 }).catch(() => false);
+        } catch {
+          interactive = false;
+        }
+      }
+
+      return {
+        url: frame.url(),
+        visible,
+        interactive
+      };
+    }));
+
+    return {
+      hasAuthFrame: frameStates.length > 0,
+      hasVisibleAuthFrame: frameStates.some((frame) => frame.visible),
+      hasInteractiveAuthFrame: frameStates.some((frame) => frame.visible && frame.interactive),
+      frameStates
+    };
   }
 
   async isSignInVisible(timeout = 1000) {
@@ -110,10 +149,11 @@ export class BaseGenerator {
 
   async checkLogin() {
     await this.page.waitForTimeout(1000);
+    const authState = await this.getAuthenticationState();
 
-    if (this.hasAuthenticationFrame()) {
-      console.log('[INFO] Authentication iframe detected - not logged in');
-      return false;
+    if (await this.hasAuthenticatedUi(1800)) {
+      console.log('[INFO] Authenticated UI detected');
+      return true;
     }
 
     if (await this.isSignInVisible(1200)) {
@@ -121,23 +161,30 @@ export class BaseGenerator {
       return false;
     }
 
-    if (await this.hasAuthenticatedUi(1800)) {
-      console.log('[INFO] Authenticated UI detected');
-      return true;
+    if (authState.hasInteractiveAuthFrame || authState.hasVisibleAuthFrame) {
+      console.log('[INFO] Visible authentication iframe detected - not logged in');
+      return false;
     }
 
     await this.page.waitForTimeout(2000);
-    return !(await this.isSignInVisible(800)) && await this.hasAuthenticatedUi(1800);
+    if (await this.hasAuthenticatedUi(1800)) {
+      console.log('[INFO] Authenticated UI detected after wait');
+      return true;
+    }
+
+    const authStateAfterWait = await this.getAuthenticationState();
+    return !authStateAfterWait.hasVisibleAuthFrame && !(await this.isSignInVisible(800));
   }
 
   async getAuthFrame() {
-    for (const frame of this.page.frames()) {
-      if (AUTH_FRAME_HOSTS.some((host) => frame.url().includes(host))) {
-        return frame;
-      }
+    const authFrames = this.getAuthenticationFrames();
+    const authState = await this.getAuthenticationState();
+    const visibleFrameUrl = authState.frameStates.find((frame) => frame.visible)?.url;
+    if (visibleFrameUrl) {
+      return authFrames.find((frame) => frame.url() === visibleFrameUrl) || authFrames[0] || null;
     }
 
-    return null;
+    return authFrames[0] || null;
   }
 
   async login(email) {
@@ -256,13 +303,33 @@ export class BaseGenerator {
     await this.dismissCookieBanner();
 
     if (await this.checkLogin()) {
+      await this.saveStorageState();
       return true;
+    }
+
+    if (this.config.headless) {
+      throw new Error('Headless mode requires a valid Firefly session. Run `npm run auth:refresh` or start with `PW_HEADLESS=false` for interactive auth/debug.');
     }
 
     await this.login(email);
     await this.openPage(url);
     await this.dismissCookieBanner();
-    return this.checkLogin();
+
+    if (await this.checkLogin()) {
+      await this.saveStorageState();
+      return true;
+    }
+
+    await this.page.waitForTimeout(1500);
+    await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+    await this.dismissCookieBanner();
+
+    const authenticated = await this.checkLogin();
+    if (authenticated) {
+      await this.saveStorageState();
+    }
+
+    return authenticated;
   }
 
   async saveStorageState() {
