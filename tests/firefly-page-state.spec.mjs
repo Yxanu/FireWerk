@@ -19,6 +19,16 @@ test('treats prompt shell plus Get Credits as ready_for_prompt', async ({ page }
   expect(pageState.hasPromptShell).toBe(true);
 });
 
+test('does not treat a hidden auth iframe as a blocking auth gate', async ({ page }) => {
+  await page.setContent(await loadFixture('firefly-prompt-shell-hidden-auth.html'));
+
+  const pageState = await detectFireflyGeneratePageState(page);
+
+  expect(pageState.matchedState).toBe(FIREFLY_PAGE_STATES.READY_FOR_PROMPT);
+  expect(pageState.hasVisibleAuthFrame).toBe(false);
+  expect(pageState.visibleAuthFrameCount).toBe(0);
+});
+
 test('detects blocking credit gate separately from prompt-ready state', async ({ page }) => {
   await page.setContent(await loadFixture('firefly-credit-gate.html'));
 
@@ -27,4 +37,13 @@ test('detects blocking credit gate separately from prompt-ready state', async ({
   expect(pageState.matchedState).toBe(FIREFLY_PAGE_STATES.CREDIT_GATE);
   expect(pageState.creditDialogVisible).toBe(true);
   expect(pageState.hasPromptShell).toBe(false);
+});
+
+test('reports visible auth iframe presence for blocking auth states', async ({ page }) => {
+  await page.setContent(await loadFixture('firefly-visible-auth-gate.html'));
+
+  const pageState = await detectFireflyGeneratePageState(page);
+
+  expect(pageState.hasVisibleAuthFrame).toBe(true);
+  expect(pageState.visibleAuthFrameCount).toBe(1);
 });

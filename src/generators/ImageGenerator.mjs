@@ -25,6 +25,7 @@ import {
   detectFireflyGeneratePageState,
   FIREFLY_PAGE_STATES
 } from './fireflyPageState.mjs';
+import { hasFreshResult } from './resultState.mjs';
 import { buildOutPath } from '../utils/files.js';
 import { RunArtifacts } from '../utils/runArtifacts.mjs';
 
@@ -198,9 +199,16 @@ export class ImageGenerator extends BaseGenerator {
   async ensurePageReady() {
     this.emitProgress({ phase: 'ensure-page-ready' });
     const pageState = await this.detectPageState();
+    const promptReadySignals = pageState.matchedState === FIREFLY_PAGE_STATES.READY_FOR_PROMPT ||
+      pageState.hasPromptShell ||
+      pageState.hasGenerateButton;
 
-    if (pageState.matchedState === FIREFLY_PAGE_STATES.AUTH_GATE || pageState.hasAuthFrame) {
+    if (pageState.matchedState === FIREFLY_PAGE_STATES.AUTH_GATE) {
       throw new Error('Firefly state: authentication gate blocking prompt input');
+    }
+
+    if (pageState.hasVisibleAuthFrame && !promptReadySignals) {
+      throw new Error('Firefly state: visible authentication gate blocking prompt input');
     }
 
     if (pageState.matchedState === FIREFLY_PAGE_STATES.CREDIT_GATE) {
@@ -310,36 +318,111 @@ export class ImageGenerator extends BaseGenerator {
     }
 
     const { locator, strategy } = promptField;
+    const previousPromptState = await this.readPromptState();
     this.runArtifacts.recordSelector('prompt-apply', strategy.name, { promptId });
-    await locator.scrollIntoViewIfNeeded();
-    await locator.click({ force: true });
+    const strategies = [
+      {
+        name: `${strategy.name}-direct`,
+        run: async () => {
+          await locator.scrollIntoViewIfNeeded();
+          await locator.click({ force: true });
 
-    if (promptField.inputMode === 'keyboard') {
-      try {
-        await this.page.keyboard.press('Meta+A');
-      } catch {
-        await this.page.keyboard.press('Control+A').catch(() => {});
-      }
-      await this.page.keyboard.press('Backspace').catch(() => {});
-      await this.page.keyboard.type(promptText, { delay: 12 });
-      return;
-    }
+          if (promptField.inputMode === 'keyboard') {
+            await this.clearPromptField();
+            await this.page.keyboard.insertText(promptText);
+            return;
+          }
 
-    try {
-      await locator.fill('');
-      await locator.fill(promptText);
-    } catch {
-      await locator.evaluate((element, text) => {
-        if ('value' in element) {
-          element.value = text;
-          element.dispatchEvent(new Event('input', { bubbles: true }));
-          element.dispatchEvent(new Event('change', { bubbles: true }));
-        } else {
-          element.textContent = text;
-          element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+          try {
+            await locator.fill('');
+            await locator.fill(promptText);
+          } catch {
+            await locator.evaluate((element, text) => {
+              if ('value' in element) {
+                element.value = text;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+              } else {
+                element.textContent = text;
+                element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
+              }
+            }, promptText);
+          }
         }
-      }, promptText);
+      },
+      {
+        name: 'prompt-dom-injection',
+        run: async () => {
+          const injected = await this.injectPromptText(promptText);
+          if (!injected) {
+            throw new Error('Prompt DOM injection target not found');
+          }
+        }
+      },
+      {
+        name: 'prompt-shell-click-insert',
+        run: async () => {
+          await locator.scrollIntoViewIfNeeded();
+          const box = await locator.boundingBox();
+          if (!box) {
+            throw new Error('Prompt shell bounding box unavailable');
+          }
+
+          const targetX = Math.round(box.x + Math.max(140, Math.min(260, box.width * 0.22)));
+          const targetY = Math.round(box.y + Math.max(34, Math.min(52, box.height * 0.42)));
+          await this.page.mouse.click(
+            targetX,
+            targetY,
+            { clickCount: 2 }
+          );
+          await this.clearPromptField();
+          await this.page.keyboard.insertText(promptText);
+        }
+      },
+      {
+        name: 'prompt-shell-tab-type',
+        run: async () => {
+          await locator.scrollIntoViewIfNeeded();
+          const box = await locator.boundingBox();
+          if (!box) {
+            throw new Error('Prompt shell bounding box unavailable');
+          }
+
+          const targetX = Math.round(box.x + Math.max(140, Math.min(260, box.width * 0.22)));
+          const targetY = Math.round(box.y + Math.max(34, Math.min(52, box.height * 0.42)));
+          await this.page.mouse.click(
+            targetX,
+            targetY
+          );
+          await this.page.keyboard.press('Tab').catch(() => {});
+          await this.clearPromptField();
+          await this.page.keyboard.type(promptText, { delay: 18 });
+        }
+      }
+    ];
+
+    for (const applyStrategy of strategies) {
+      try {
+        await applyStrategy.run();
+        if (await this.waitForPromptAccepted(promptText, previousPromptState)) {
+          this.runArtifacts.recordSelector('prompt-apply-success', applyStrategy.name, { promptId });
+          return;
+        }
+      } catch (error) {
+        this.runArtifacts.recordFallback('prompt-apply-strategy-failed', {
+          promptId,
+          strategy: applyStrategy.name,
+          message: error.message
+        });
+      }
     }
+
+    const promptState = await this.readPromptState();
+    this.runArtifacts.recordEvent('prompt-apply-failed', {
+      promptId,
+      promptState
+    });
+    throw new Error(`Prompt text was not accepted for prompt "${promptId}"`);
   }
 
   async applyCapabilities({ model, aspectRatio, style, promptId }) {
@@ -360,13 +443,20 @@ export class ImageGenerator extends BaseGenerator {
       currentVariant: variant
     });
 
-    const previousResultCount = await this.countResultCandidates();
-    const generationStarted = await this.triggerGeneration(promptId);
-    if (!generationStarted) {
-      throw new Error(`Generation did not start for "${promptId}" variant ${variant}`);
+    const previousResultState = await this.readResultState();
+    const triggerState = await this.triggerGeneration(promptId, previousResultState);
+    if (!triggerState.attempted) {
+      throw new Error(`Generation trigger could not be attempted for "${promptId}" variant ${variant}`);
     }
 
-    await this.awaitResult(previousResultCount);
+    if (!triggerState.started) {
+      this.runArtifacts.recordFallback('generation-start-inferred', {
+        promptId,
+        variant
+      });
+    }
+
+    await this.awaitResult(previousResultState, { promptId, variant, triggerState });
     const capture = await this.captureResult({ promptId, variant });
     this.emitProgress({
       generatedVariants: this.progress.generatedVariants + 1,
@@ -455,6 +545,143 @@ export class ImageGenerator extends BaseGenerator {
     return pageState;
   }
 
+  async clearPromptField() {
+    try {
+      await this.page.keyboard.press('Meta+A');
+    } catch {
+      await this.page.keyboard.press('Control+A').catch(() => {});
+    }
+    await this.page.keyboard.press('Backspace').catch(() => {});
+  }
+
+  async injectPromptText(promptText) {
+    return this.page.evaluate((text) => {
+      const hosts = Array.from(document.querySelectorAll('firefly-prompt, [data-testid="prompt-bar-input"]'));
+      const candidateRoots = [];
+
+      hosts.forEach((host) => {
+        candidateRoots.push(host);
+        if (host.shadowRoot) {
+          candidateRoots.push(host.shadowRoot);
+          const nestedTextfield = host.shadowRoot.querySelector('firefly-textfield, sp-textfield');
+          if (nestedTextfield?.shadowRoot) {
+            candidateRoots.push(nestedTextfield.shadowRoot);
+          }
+        }
+      });
+
+      const editable = candidateRoots
+        .flatMap((root) => Array.from(root.querySelectorAll?.('textarea, [contenteditable="true"], [role="textbox"]') || []))
+        .find((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        });
+
+      if (!editable) {
+        return false;
+      }
+
+      if ('value' in editable) {
+        editable.focus();
+        editable.value = text;
+        editable.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        editable.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+      }
+
+      editable.focus();
+      editable.textContent = text;
+      editable.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        composed: true,
+        data: text,
+        inputType: 'insertText'
+      }));
+      return true;
+    }, promptText);
+  }
+
+  async readPromptState() {
+    return this.page.evaluate(() => {
+      const hosts = Array.from(document.querySelectorAll('firefly-prompt, [data-testid="prompt-bar-input"]'));
+      const texts = [];
+
+      const readEditable = (root) => {
+        const editable = root?.querySelector?.('textarea, [contenteditable="true"], [role="textbox"]');
+        if (!editable) return;
+        const value = 'value' in editable ? editable.value : (editable.textContent || '');
+        if (value) {
+          texts.push(value.trim());
+        }
+      };
+
+      hosts.forEach((host) => {
+        readEditable(host);
+        if (host.shadowRoot) {
+          readEditable(host.shadowRoot);
+          const nestedTextfield = host.shadowRoot.querySelector('firefly-textfield, sp-textfield');
+          if (nestedTextfield?.shadowRoot) {
+            readEditable(nestedTextfield.shadowRoot);
+          }
+        }
+      });
+
+      const activeElement = document.activeElement;
+      return {
+        values: texts.filter(Boolean),
+        activeTag: activeElement?.tagName || '',
+        activeRole: activeElement?.getAttribute?.('role') || '',
+        activeAriaLabel: activeElement?.getAttribute?.('aria-label') || '',
+        bodyPreview: document.body.innerText.slice(0, 4000)
+      };
+    });
+  }
+
+  promptStateContains(promptState, normalizedNeedle) {
+    if (!promptState || !normalizedNeedle) {
+      return false;
+    }
+
+    const valuesMatch = (promptState.values || []).some((value) => value.toLowerCase().includes(normalizedNeedle));
+    const bodyMatch = String(promptState.bodyPreview || '').toLowerCase().includes(normalizedNeedle);
+    return valuesMatch || bodyMatch;
+  }
+
+  async waitForPromptAccepted(promptText, previousPromptState = null) {
+    const normalizedNeedle = String(promptText || '').trim().toLowerCase().slice(0, 32);
+    const startedAt = Date.now();
+    const previousMatched = this.promptStateContains(previousPromptState, normalizedNeedle);
+    const previousHadEvidence = Boolean(previousPromptState?.values?.length || previousPromptState?.bodyPreview);
+
+    while (Date.now() - startedAt < 15000) {
+      const promptState = await this.readPromptState();
+      const matched = this.promptStateContains(promptState, normalizedNeedle);
+      if (matched) {
+        this.runArtifacts.recordEvent('prompt-accepted', {
+          promptState
+        });
+        return true;
+      }
+
+      const button = await this.findGenerateButton({ timeoutMs: 200 });
+      if (button && await this.isGenerateButtonReady(button)) {
+        if (previousHadEvidence && previousMatched) {
+          await this.page.waitForTimeout(200);
+          continue;
+        }
+
+        this.runArtifacts.recordEvent('prompt-accepted-generate-ready', {
+          strategy: button.strategy.name
+        });
+        return true;
+      }
+
+      await this.page.waitForTimeout(200);
+    }
+
+    return false;
+  }
+
   async findPicker(strategies, hints) {
     const direct = await findFirstVisibleLocator(this.page, strategies, { timeoutMs: 1200 });
     if (direct && direct.strategy.name !== 'generic-picker-fallback') {
@@ -529,7 +756,7 @@ export class ImageGenerator extends BaseGenerator {
   }
 
   async waitForGenerateEnabled() {
-    const button = await findFirstVisibleLocator(this.page, GENERATE_BUTTON_SELECTORS, { timeoutMs: 1500 });
+    const button = await this.findGenerateButton({ timeoutMs: 1500 });
     if (!button) {
       throw new Error('Generate button not found');
     }
@@ -540,11 +767,7 @@ export class ImageGenerator extends BaseGenerator {
     const startedAt = Date.now();
     while (Date.now() - startedAt < 10000) {
       try {
-        const isReady = await button.locator.evaluate((buttonElement) =>
-          !buttonElement.hasAttribute('disabled') &&
-          buttonElement.getAttribute('aria-disabled') !== 'true' &&
-          buttonElement.getAttribute('aria-busy') !== 'true'
-        );
+        const isReady = await this.isGenerateButtonReady(button);
 
         if (isReady) {
           return button;
@@ -559,40 +782,140 @@ export class ImageGenerator extends BaseGenerator {
     throw new Error('Generate button stayed disabled');
   }
 
-  async triggerGeneration(promptId) {
+  async isGenerateButtonReady(button) {
+    return button.locator.evaluate((buttonElement) =>
+      !buttonElement.hasAttribute('disabled') &&
+      buttonElement.getAttribute('aria-disabled') !== 'true' &&
+      buttonElement.getAttribute('aria-busy') !== 'true'
+    );
+  }
+
+  async findGenerateButton(options = {}) {
+    const directMatch = await findFirstVisibleLocator(this.page, GENERATE_BUTTON_SELECTORS, { timeoutMs: options.timeoutMs ?? 1500 });
+    if (directMatch && await this.isLikelyPromptGenerateControl(directMatch.locator)) {
+      return directMatch;
+    }
+
+    const handle = await this.page.evaluateHandle(() => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+      };
+
+      const queue = [document];
+      while (queue.length > 0) {
+        const root = queue.shift();
+        const elements = Array.from(root.querySelectorAll?.('*') || []);
+
+        for (const element of elements) {
+          if (element.shadowRoot) {
+            queue.push(element.shadowRoot);
+          }
+
+          const isButtonLike = element.matches?.('button, [role="button"], sp-button, sp-action-button') ||
+            Boolean(element.getAttribute?.('aria-label')) ||
+            Boolean(element.getAttribute?.('data-testid'));
+          if (!isButtonLike) continue;
+          if (!isVisible(element)) continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.top < window.innerHeight * 0.55) continue;
+          const text = `${element.textContent || ''} ${element.getAttribute('aria-label') || ''} ${element.getAttribute('data-testid') || ''}`.toLowerCase();
+          if (/generate|create/.test(text)) {
+            return element;
+          }
+        }
+      }
+
+      return null;
+    });
+
+    const element = handle.asElement();
+    if (!element) {
+      await handle.dispose();
+      return null;
+    }
+
+    return {
+      strategy: { name: 'generate-deep-search', selector: 'deep-search' },
+      locator: element
+    };
+  }
+
+  async isLikelyPromptGenerateControl(locator) {
+    return locator.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const testId = element.getAttribute('data-testid') || '';
+      const text = `${element.textContent || ''} ${element.getAttribute('aria-label') || ''}`.toLowerCase();
+
+      if (testId === 'generate-button') {
+        return true;
+      }
+
+      if (!/generate|create/.test(text)) {
+        return false;
+      }
+
+      return rect.top >= window.innerHeight * 0.55;
+    }).catch(() => false);
+  }
+
+  async triggerGeneration(promptId, previousResultState = {}) {
     const generateButton = await this.waitForGenerateEnabled();
     const promptField = await this.findPromptField();
+    let attempted = false;
     const strategies = [
       {
         name: 'meta-enter',
         run: async () => {
-          if (!promptField) return;
+          if (!promptField) return false;
           await promptField.locator.click({ force: true });
           await this.page.keyboard.press('Meta+Enter');
+          return true;
         }
       },
       {
         name: 'control-enter',
         run: async () => {
-          if (!promptField) return;
+          if (!promptField) return false;
           await promptField.locator.click({ force: true });
           await this.page.keyboard.press('Control+Enter');
+          return true;
         }
       },
       {
         name: generateButton.strategy.name,
         run: async () => {
           await generateButton.locator.click({ force: true });
+          return true;
         }
       }
     ];
 
     for (const strategy of strategies) {
       try {
-        await strategy.run();
-        if (await this.waitForGenerationStart()) {
+        const didRun = await strategy.run();
+        if (didRun === false) {
+          continue;
+        }
+        attempted = true;
+        if (await this.waitForGenerationStart(previousResultState)) {
           this.runArtifacts.recordSelector('generation-trigger', strategy.name, { promptId });
-          return true;
+          return {
+            attempted: true,
+            started: true,
+            strategy: strategy.name
+          };
+        }
+
+        if (await this.hasLikelyRenderedResult(previousResultState)) {
+          this.runArtifacts.recordSelector('generation-trigger', `${strategy.name}-result-visible`, { promptId });
+          return {
+            attempted: true,
+            started: true,
+            strategy: `${strategy.name}-result-visible`
+          };
         }
       } catch (error) {
         this.runArtifacts.recordFallback('trigger-strategy-failed', {
@@ -603,25 +926,73 @@ export class ImageGenerator extends BaseGenerator {
       }
     }
 
-    return false;
+    return {
+      attempted,
+      started: false,
+      strategy: null
+    };
   }
 
-  async waitForGenerationStart() {
+  async waitForGenerationStart(previousResultState = {}) {
+    const previousResultCount = Number(previousResultState.count || 0);
     try {
       await this.page.waitForFunction(
-        () => {
-          const button = document.querySelector('[data-testid="generate-button"]');
-          const isBusy = Boolean(button && (
+        (previousCount) => {
+          const isVisible = (element) => {
+            if (!element) return false;
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.visibility !== 'hidden' &&
+              style.display !== 'none' &&
+              rect.width > 0 &&
+              rect.height > 0;
+          };
+
+          const roots = [document];
+          const buttonCandidates = [];
+
+          while (roots.length > 0) {
+            const root = roots.shift();
+            const elements = Array.from(root.querySelectorAll?.('*') || []);
+
+            for (const element of elements) {
+              if (element.shadowRoot) {
+                roots.push(element.shadowRoot);
+              }
+
+              const isButtonLike = element.matches?.('button, [role="button"], sp-button, sp-action-button') ||
+                Boolean(element.getAttribute?.('aria-label')) ||
+                Boolean(element.getAttribute?.('data-testid'));
+              if (!isButtonLike || !isVisible(element)) {
+                continue;
+              }
+
+              const rect = element.getBoundingClientRect();
+              const text = `${element.textContent || ''} ${element.getAttribute('aria-label') || ''} ${element.getAttribute('data-testid') || ''}`.toLowerCase();
+              if (rect.top >= window.innerHeight * 0.55 && /generate|create|generating|creating/.test(text)) {
+                buttonCandidates.push(element);
+              }
+            }
+          }
+
+          const isBusy = buttonCandidates.some((button) =>
             button.hasAttribute('disabled') ||
             button.getAttribute('aria-disabled') === 'true' ||
-            button.getAttribute('aria-busy') === 'true'
-          ));
-          const loader = document.querySelector('[data-testid*="progress"], [data-testid*="loader"], [class*="loader"], [class*="Spinner"]');
+            button.getAttribute('aria-busy') === 'true' ||
+            /generating|creating/i.test(button.textContent || '')
+          );
+          const loader = document.querySelector(
+            '[data-testid*="progress"], [data-testid*="loader"], [class*="loader"], [class*="Loader"], [class*="spinner"], [class*="Spinner"], [class*="skeleton"], [class*="Skeleton"], [class*="placeholder"]'
+          );
           const generatingCopy = Array.from(document.querySelectorAll('button, span, div'))
             .some((element) => /generating|working|creating/i.test(element?.textContent?.trim() || ''));
-          return isBusy || Boolean(loader) || generatingCopy;
+          const results = document.querySelectorAll(
+            'img[src^="blob:"], img[src*="firefly"], img[src*="adobe"], [data-testid*="result"] img, [class*="result"] img, canvas'
+          );
+          return isBusy || Boolean(loader) || generatingCopy || results.length > previousCount;
         },
-        { timeout: 8000 }
+        previousResultCount,
+        { timeout: 20000 }
       );
       return true;
     } catch {
@@ -629,23 +1000,66 @@ export class ImageGenerator extends BaseGenerator {
     }
   }
 
-  async awaitResult(previousResultCount) {
-    this.emitProgress({ phase: 'await-result' });
-    await this.page.waitForFunction(
-      (previousCount) => {
-        const candidates = document.querySelectorAll(
-          'img[src^="blob:"], img[src*="firefly"], img[src*="adobe"], [data-testid*="result"] img, [class*="result"] img, canvas'
-        );
-        const button = document.querySelector('[data-testid="generate-button"]');
-        const buttonReady = button &&
-          !button.hasAttribute('disabled') &&
-          button.getAttribute('aria-disabled') !== 'true' &&
-          button.getAttribute('aria-busy') !== 'true';
+  async hasLikelyRenderedResult(previousResultState = {}) {
+    const currentState = await this.readResultState();
+    if (hasFreshResult(previousResultState, currentState)) {
+      return true;
+    }
 
-        return candidates.length > previousCount && buttonReady;
-      },
-      previousResultCount,
-      { timeout: this.config.waitForResultTimeoutMs }
+    const previousResultCount = Number(previousResultState.count || 0);
+    return this.page.evaluate((previousCount) => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          rect.width > 0 &&
+          rect.height > 0;
+      };
+
+      const resultCandidates = Array.from(document.querySelectorAll(
+        'img[src^="blob:"], img[src*="firefly"], img[src*="adobe"], [data-testid*="result"] img, [class*="result"] img, [class*="ResultsGrid"] img, main img, section img, article img, canvas'
+      )).filter((element) => {
+        if (!isVisible(element)) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width >= 220 && rect.height >= 180 && rect.top < window.innerHeight * 0.8;
+      });
+
+      if (resultCandidates.length > previousCount) {
+        return true;
+      }
+
+      return resultCandidates.some((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width >= 280 && rect.height >= 220;
+      });
+    }, previousResultCount).catch(() => false);
+  }
+
+  async awaitResult(previousResultCount, context = {}) {
+    this.emitProgress({ phase: 'await-result' });
+    const startedAt = Date.now();
+    const timeoutMs = this.config.waitForResultTimeoutMs;
+
+    while (Date.now() - startedAt < timeoutMs) {
+      if (await this.hasLikelyRenderedResult(previousResultCount)) {
+        this.runArtifacts.recordEvent('result-ready', {
+          promptId: context.promptId || null,
+          variant: context.variant || null,
+          triggerStarted: Boolean(context.triggerState?.started),
+          triggerStrategy: context.triggerState?.strategy || null
+        });
+        return;
+      }
+
+      await this.page.waitForTimeout(400);
+    }
+
+    const resultCount = await this.countResultCandidates().catch(() => null);
+    throw new Error(
+      `Result did not appear for "${context.promptId || 'unknown'}" variant ${context.variant || '?'}` +
+      (resultCount !== null ? ` (resultCount=${resultCount}, previous=${Number(previousResultCount?.count || 0)})` : '')
     );
   }
 
@@ -661,6 +1075,115 @@ export class ImageGenerator extends BaseGenerator {
     );
 
     return Math.max(0, ...counts);
+  }
+
+  async readResultState() {
+    return this.page.evaluate(() => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          rect.width > 0 &&
+          rect.height > 0;
+      };
+
+      const isMediaLike = (element) => {
+        const style = window.getComputedStyle(element);
+        if (/(IMG|CANVAS|VIDEO|PICTURE)$/.test(element.tagName)) {
+          return true;
+        }
+
+        if (style.backgroundImage && style.backgroundImage !== 'none') {
+          return true;
+        }
+
+        return Boolean(element.querySelector?.('img, canvas, video, picture'));
+      };
+
+      const roots = [document];
+      const candidates = [];
+
+      while (roots.length > 0) {
+        const root = roots.shift();
+        const elements = Array.from(root.querySelectorAll?.('*') || []);
+
+        for (const element of elements) {
+          if (element.shadowRoot) {
+            roots.push(element.shadowRoot);
+          }
+
+          if (!isVisible(element) || !isMediaLike(element)) {
+            continue;
+          }
+
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 220 || rect.height < 180) {
+            continue;
+          }
+
+          if (rect.top > window.innerHeight * 0.82 || rect.left < 180) {
+            continue;
+          }
+
+          const area = rect.width * rect.height;
+          const mediaChild = element.matches?.('img, canvas, video, picture')
+            ? element
+            : element.querySelector?.('img, canvas, video, picture');
+          const style = window.getComputedStyle(element);
+          const mediaSource = mediaChild?.currentSrc ||
+            mediaChild?.src ||
+            mediaChild?.getAttribute?.('src') ||
+            (mediaChild?.tagName === 'CANVAS'
+              ? (() => {
+                try {
+                  return mediaChild.toDataURL('image/png').slice(0, 128);
+                } catch {
+                  return '';
+                }
+              })()
+              : '');
+          const fingerprint = [
+            element.tagName,
+            mediaChild?.tagName || '',
+            mediaSource,
+            style.backgroundImage !== 'none' ? style.backgroundImage : '',
+            element.getAttribute('data-testid') || '',
+            element.getAttribute('aria-label') || '',
+            Math.round(rect.width),
+            Math.round(rect.height),
+            Math.round(rect.left),
+            Math.round(rect.top)
+          ].join('|');
+
+          candidates.push({
+            area,
+            fingerprint,
+            tagName: element.tagName,
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height
+          });
+        }
+      }
+
+      candidates.sort((left, right) => right.area - left.area);
+      const primary = candidates[0] || null;
+
+      return {
+        count: candidates.length,
+        primaryFingerprint: primary?.fingerprint || null,
+        fingerprints: candidates.map((candidate) => candidate.fingerprint),
+        primary
+      };
+    }).catch(() => ({
+      count: 0,
+      primaryFingerprint: null,
+      fingerprints: [],
+      primary: null
+    }));
   }
 
   async captureResult({ promptId, variant }) {
@@ -702,7 +1225,7 @@ export class ImageGenerator extends BaseGenerator {
     await image.locator.hover({ force: true });
     await this.page.waitForTimeout(500);
 
-    const downloadButton = await findFirstVisibleLocator(this.page, DOWNLOAD_BUTTON_SELECTORS, { timeoutMs: 2000 });
+    const downloadButton = await this.findDownloadButton(image);
     if (!downloadButton) {
       throw new Error('Download button not found');
     }
@@ -728,6 +1251,99 @@ export class ImageGenerator extends BaseGenerator {
     };
   }
 
+  async findDownloadButton(image) {
+    const direct = await findFirstVisibleLocator(this.page, DOWNLOAD_BUTTON_SELECTORS, { timeoutMs: 1200 });
+    if (direct) {
+      return direct;
+    }
+
+    const imageBox = await image?.locator?.boundingBox().catch(() => null);
+    const handle = await this.page.evaluateHandle((box) => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          rect.width > 0 &&
+          rect.height > 0;
+      };
+
+      const queue = [document];
+      let best = null;
+
+      while (queue.length > 0) {
+        const root = queue.shift();
+        const elements = Array.from(root.querySelectorAll?.('*') || []);
+
+        for (const element of elements) {
+          if (element.shadowRoot) {
+            queue.push(element.shadowRoot);
+          }
+
+          const isButtonLike = element.matches?.('button, [role="button"], sp-action-button, a[download]') ||
+            Boolean(element.getAttribute?.('aria-label')) ||
+            Boolean(element.getAttribute?.('data-testid')) ||
+            Boolean(element.getAttribute?.('title'));
+          if (!isButtonLike || !isVisible(element)) {
+            continue;
+          }
+
+          const text = [
+            element.textContent || '',
+            element.getAttribute('aria-label') || '',
+            element.getAttribute('data-testid') || '',
+            element.getAttribute('title') || '',
+            element.getAttribute('label') || ''
+          ].join(' ').toLowerCase();
+
+          if (!/download|herunterladen/.test(text)) {
+            continue;
+          }
+
+          const rect = element.getBoundingClientRect();
+          let score = 0;
+          if ((element.getAttribute('data-testid') || '').includes('download')) {
+            score += 100;
+          }
+          if ((element.getAttribute('aria-label') || '').toLowerCase().includes('download') ||
+            (element.getAttribute('aria-label') || '').toLowerCase().includes('herunterladen')) {
+            score += 60;
+          }
+
+          if (box) {
+            const withinHorizontal = rect.left >= box.x - 80 && rect.right <= box.x + box.width + 120;
+            const withinVertical = rect.top >= box.y - 80 && rect.bottom <= box.y + box.height + 120;
+            if (withinHorizontal && withinVertical) {
+              score += 80;
+            }
+
+            if (rect.left >= box.x + box.width * 0.6 && rect.top <= box.y + box.height * 0.35) {
+              score += 40;
+            }
+          }
+
+          if (!best || score > best.score) {
+            best = { element, score };
+          }
+        }
+      }
+
+      return best?.element || null;
+    }, imageBox);
+
+    const deepElement = handle.asElement();
+    if (deepElement) {
+      return {
+        strategy: { name: 'download-deep-search', selector: 'deep-download-search' },
+        locator: deepElement
+      };
+    }
+
+    await handle.dispose();
+    return null;
+  }
+
   async captureViaScreenshot(promptId, variant) {
     const image = await this.findFirstResultLocator();
     if (!image) {
@@ -746,6 +1362,125 @@ export class ImageGenerator extends BaseGenerator {
   }
 
   async findFirstResultLocator() {
+    const deepHandle = await this.page.evaluateHandle(() => {
+      const isVisible = (element) => {
+        if (!element) return false;
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          rect.width > 0 &&
+          rect.height > 0;
+      };
+
+      const isMediaLike = (element) => {
+        const style = window.getComputedStyle(element);
+        if (/(IMG|CANVAS|VIDEO|PICTURE)$/.test(element.tagName)) {
+          return true;
+        }
+
+        if (style.backgroundImage && style.backgroundImage !== 'none') {
+          return true;
+        }
+
+        return Boolean(element.querySelector?.('img, canvas, video, picture'));
+      };
+
+      const roots = [document];
+      let best = null;
+
+      while (roots.length > 0) {
+        const root = roots.shift();
+        const elements = Array.from(root.querySelectorAll?.('*') || []);
+
+        for (const element of elements) {
+          if (element.shadowRoot) {
+            roots.push(element.shadowRoot);
+          }
+
+          if (!isVisible(element) || !isMediaLike(element)) {
+            continue;
+          }
+
+          const rect = element.getBoundingClientRect();
+          if (rect.width < 220 || rect.height < 180) {
+            continue;
+          }
+
+          if (rect.top > window.innerHeight * 0.82 || rect.left < 180) {
+            continue;
+          }
+
+          const area = rect.width * rect.height;
+          if (!best || area > best.area) {
+            best = {
+              area,
+              element
+            };
+          }
+        }
+      }
+
+      return best?.element || null;
+    });
+
+    const deepElement = deepHandle.asElement();
+    if (deepElement) {
+      return {
+        strategy: { name: 'result-deep-surface', selector: 'deep-result-surface' },
+        locator: deepElement
+      };
+    }
+
+    await deepHandle.dispose();
+    let bestMatch = null;
+    const viewportHeight = await this.page.evaluate(() => window.innerHeight).catch(() => 0);
+
+    for (const strategy of RESULT_IMAGE_SELECTORS) {
+      const candidates = this.page.locator(strategy.selector);
+      const count = await candidates.count().catch(() => 0);
+
+      for (let index = 0; index < count; index++) {
+        const locator = candidates.nth(index);
+        try {
+          if (!(await locator.isVisible({ timeout: 250 }))) {
+            continue;
+          }
+
+          const metrics = await locator.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              width: rect.width,
+              height: rect.height,
+              top: rect.top
+            };
+          });
+
+          const area = (metrics.width || 0) * (metrics.height || 0);
+          if (area < 30000 || (viewportHeight && metrics.top > 0.82 * viewportHeight)) {
+            continue;
+          }
+
+          if (!bestMatch || area > bestMatch.area) {
+            bestMatch = {
+              area,
+              strategy,
+              locator
+            };
+          }
+        } catch {
+          // Ignore stale or hidden nodes.
+        }
+      }
+    }
+
+    if (bestMatch) {
+      return {
+        strategy: bestMatch.strategy,
+        locator: bestMatch.locator
+      };
+    }
+
     return findFirstVisibleLocator(this.page, RESULT_IMAGE_SELECTORS, { timeoutMs: 2000 });
   }
 

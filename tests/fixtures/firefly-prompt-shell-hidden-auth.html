@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <iframe
+      src="https://auth-light.identity.adobe.com/test"
+      style="display: none; width: 0; height: 0; border: 0;"
+      title="Hidden auth"
+    ></iframe>
+
+    <header>
+      <h1>Generate image</h1>
+      <button type="button">Get Credits</button>
+    </header>
+
+    <aside>
+      <h2>General settings</h2>
+      <div>Model</div>
+    </aside>
+
+    <footer style="position: fixed; bottom: 0; left: 0; right: 0;">
+      <div>Prompt</div>
+      <firefly-prompt data-testid="prompt-bar-input"></firefly-prompt>
+      <button data-testid="generate-button" disabled>Generate</button>
+    </footer>
+  </body>
+</html>

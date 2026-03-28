@@ -42,6 +42,7 @@ export const RESULT_IMAGE_SELECTORS = [
   { name: 'result-image-firefly', selector: 'img[src*="firefly"], img[src*="adobe"]' },
   { name: 'result-image-testid', selector: '[data-testid*="result"] img' },
   { name: 'result-image-class', selector: '[class*="result"] img, [class*="ResultsGrid"] img' },
+  { name: 'result-main-image', selector: 'main img, section img, article img' },
   { name: 'result-canvas', selector: 'canvas' }
 ];
 

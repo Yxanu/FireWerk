@@ -68,6 +68,9 @@ export async function detectFireflyGeneratePageState(page) {
     const promptHosts = Array.from(document.querySelectorAll('firefly-prompt, [data-testid="prompt-bar-input"]'));
     const visiblePromptHost = promptHosts.find((host) => isVisibleInPage(host)) || null;
     const shadowEditable = visiblePromptHost ? findShadowEditableInPage(visiblePromptHost) : null;
+    const authIframes = Array.from(document.querySelectorAll('iframe'))
+      .filter((element) => /auth-light\.identity\.adobe\.com|auth\.services\.adobe\.com|adobeid\.adobe\.com/i.test(element.getAttribute('src') || ''));
+    const visibleAuthIframes = authIframes.filter((element) => isVisibleInPage(element));
 
     const visibleTextareas = Array.from(document.querySelectorAll('textarea')).filter((element) => isVisibleInPage(element));
     const visibleContentEditable = Array.from(document.querySelectorAll('[contenteditable="true"], [role="textbox"]'))
@@ -142,6 +145,9 @@ export async function detectFireflyGeneratePageState(page) {
       promptLabelCount: promptLabels.length,
       visibleTextareaCount: visibleTextareas.length,
       visibleContentEditableCount: visibleContentEditable.length,
+      authFrameCount: authIframes.length,
+      visibleAuthFrameCount: visibleAuthIframes.length,
+      hasVisibleAuthFrame: visibleAuthIframes.length > 0,
       bodyPreview: bodyText.slice(0, 500)
     };
   }, FIREFLY_PAGE_STATES);
